@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "565840248270",
+    "project_id": "si-elang-lebong",
+    "storage_bucket": "si-elang-lebong.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:565840248270:android:9bf12c6d2e75c948d37f9f",
+        "android_client_info": {
+          "package_name": "com.sielang.lebong"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAbxP9cFV1WwX87o0VrGUQcxEvp-qjaSSg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

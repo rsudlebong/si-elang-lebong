@@ -19,7 +19,7 @@ import {
   Siren, Wind, Sparkles, AlertCircle, Eye, EyeOff, History, 
   CalendarDays, Fingerprint, Stethoscope, BriefcaseMedical, Key, 
   Edit, Trash2, Smartphone, Camera, Rocket, Lock, Video, ImagePlus,
-  WifiOff, Moon, Sun, Maximize, Minimize
+  WifiOff, Moon, Sun, Maximize, Minimize, UploadCloud
 } from 'lucide-react';
 
 // ==========================================
@@ -242,6 +242,9 @@ const App = () => {
 
   const [fullScreenMapId, setFullScreenMapId] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  
+  // Tambahan Ref untuk membatasi pengiriman GPS ke Firebase
+  const lastGpsUpdate = useRef(0);
 
   const performLogout = useCallback(() => { 
     setView('login'); 
@@ -377,8 +380,13 @@ const App = () => {
     return () => { unsubscribe(); clearInterval(intervalId); document.removeEventListener('click', unlockAudio); document.removeEventListener('touchstart', unlockAudio); if (alarmAudio.current) alarmAudio.current.pause(); };
   }, []);
 
+  // PERBAIKAN READ LEAKS (Kebocoran kuota baca data Firebase)
   useEffect(() => {
-    if (!user || view === 'login') return; 
+    // Hanya lakukan subscribe JIKA user sudah berhasil login (username terisi).
+    // KITA MENGHAPUS 'view' DARI DEPENDENSI agar perpindahan halaman/menu 
+    // TIDAK memicu unduh/subscribe ulang ke seluruh database.
+    if (!user || !username) return; 
+    
     const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
     const unsubscribeUsers = onSnapshot(usersRef, (docSnap) => {
         if (docSnap.exists()) setAppUsers(docSnap.data()); 
@@ -403,7 +411,7 @@ const App = () => {
     );
 
     return () => { unsubscribeUsers(); unsubscribeTrips(); };
-  }, [user, view]);
+  }, [user, username]); // Dependensi dirubah menjadi 'username' bukan 'view'
 
   useEffect(() => {
     if (!user || !user.uid || !username) return;
@@ -475,13 +483,21 @@ const App = () => {
   }, [activeTrips, role, user, dailyCheck, rejectedCalls]);
 
   const activeTripId = activeTrips.find(t => t.status === 'OTW' && t.driverId === username)?.id;
+  
+  // PERBAIKAN WRITE LEAKS (Kebocoran kuota tulis GPS Firebase)
   useEffect(() => {
     let watchId;
     if (role === 'driver' && activeTripId && user && isOnline) {
       if ('geolocation' in navigator) {
         watchId = navigator.geolocation.watchPosition(
           async (pos) => {
+            const now = Date.now();
+            // Batasi pengiriman lokasi ke Firebase HANYA SETIAP 15 DETIK SEKALI
+            // Hal ini secara drastis menghemat kuota Writes Firebase
+            if (now - lastGpsUpdate.current < 15000) return;
+
             try { 
+              lastGpsUpdate.current = now;
               await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', activeTripId), { 
                 driverLocation: { lat: pos.coords.latitude, lng: pos.coords.longitude } 
               }); 
@@ -783,7 +799,7 @@ const App = () => {
         const script = document.createElement('script'); script.src = 'https://cdn.jsdelivr.net/gh/linways/table-to-excel@1.0.4/dist/tableToExcel.js';
         await new Promise((res, rej) => { script.onload = res; script.onerror = rej; document.head.appendChild(script); });
       }
-      const table = document.createElement('table'); table.setAttribute('data-cols-width', '5,12,10,10,12,10,20,20,15,15,15,15,15,10,15,30,10');
+      const table = document.createElement('table'); table.setAttribute('data-cols-width', '5,12,10,10,12,10,20,20,15,15,15,15,15,10,15,30,15,10');
       let html = `<thead><tr>
         <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">No</th><th style="font-weight:bold; background-color:#f1f5f9;">Tanggal</th>
         <th style="font-weight:bold; background-color:#f1f5f9;">Berangkat</th><th style="font-weight:bold; background-color:#f1f5f9;">Tiba</th>
@@ -793,16 +809,19 @@ const App = () => {
         <th style="font-weight:bold; background-color:#f1f5f9;">Perawat</th><th style="font-weight:bold; background-color:#f1f5f9;">Driver</th>
         <th style="font-weight:bold; background-color:#f1f5f9;">DPJP</th><th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">KM Total</th>
         <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">Input Manual</th><th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">Bukti Foto KM</th>
+        <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">Berkas</th>
         <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">Durasi(M)</th>
       </tr></thead><tbody>`;
       filteredHistory.forEach((t, i) => {
         const imgAwal = t.kmStartPhoto ? `<img src="${t.kmStartPhoto}" width="80" height="80" />` : ''; const imgAkhir = t.kmEndPhoto ? `<img src="${t.kmEndPhoto}" width="80" height="80" />` : '';
+        const berkasText = t.referralDocs?.length ? `${t.referralDocs.length} File` : (t.referralDoc ? '1 File' : 'N/A');
         html += `<tr>
           <td style="text-align:center;">${i + 1}</td><td>${new Date(t.startTime).toLocaleDateString('id-ID')}</td><td>${new Date(t.startTime).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'})}</td>
           <td>${t.endTime ? new Date(t.endTime).toLocaleTimeString('id-ID', {hour:'2-digit',minute:'2-digit'}) : '-'}</td><td>${t.serviceType === 'jenazah' ? 'Jenazah' : 'Rujukan'}</td>
           <td>${t.paymentStatus || 'UMUM'}</td><td>${t.patientName}</td><td>${t.diagnosis}</td><td>${t.origin}</td><td>${t.destination}</td>
           <td>${t.nurse}</td><td>${t.driver}</td><td>${t.dpjp}</td><td style="text-align:center;">${(t.kmEndValue && t.kmStartValue) ? (t.kmEndValue - t.kmStartValue) : '-'}</td>
           <td style="text-align:center;">${t.kmStartValue || '-'} s/d ${t.kmEndValue || '-'}</td><td style="text-align:center; vertical-align:middle; height:90px;">${imgAwal}${imgAkhir}</td>
+          <td style="text-align:center;">${berkasText}</td>
           <td style="text-align:center;">${getDuration(t.startTime, t.endTime)}</td>
         </tr>`;
       });
@@ -861,7 +880,7 @@ const App = () => {
       doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 58, 138); 
       doc.text('RSUD LEBONG', pageWidth / 2, 26, { align: 'center' });
 
-      const head = [['NO', 'NAMA DRIVER', 'PERAWAT/BIDAN', 'PASIEN / JENAZAH', 'TANGGAL', 'RUANGAN ASAL', 'TUJUAN PENGANTARAN', 'TOTAL KM', 'MANUAL\n(AWAL-AKHIR)', 'BUKTI FOTO', 'DURASI']];
+      const head = [['NO', 'NAMA DRIVER', 'PERAWAT/BIDAN', 'PASIEN / JENAZAH', 'TANGGAL', 'RUANGAN ASAL', 'TUJUAN PENGANTARAN', 'TOTAL KM', 'MANUAL\n(AWAL-AKHIR)', 'FOTO KM\nODOMETER', 'BERKAS\nRUJUKAN', 'DURASI']];
       const body = filteredHistory.map((t, i) => {
         const date = new Date(t.startTime).toLocaleDateString('id-ID', {day:'2-digit', month:'short', year:'numeric'});
         const totalKm = (t.kmEndValue && t.kmStartValue) ? String(t.kmEndValue - t.kmStartValue) : '-';
@@ -869,19 +888,67 @@ const App = () => {
         const durasi = `${getDuration(t.startTime, t.endTime)} Mnt`;
         const namaPasien = `${t.patientName}\n(Ket: ${t.diagnosis})`;
         
-        return [ i + 1, t.driver, t.nurse, namaPasien, date, t.origin, t.destination, totalKm, manualKm, '', durasi ];
+        return [ i + 1, t.driver, t.nurse, namaPasien, date, t.origin, t.destination, totalKm, manualKm, '', '', durasi ];
       });
 
       doc.autoTable({
         startY: 38, head: head, body: body, theme: 'grid',
         styles: { fontSize: 8, cellPadding: 3, valign: 'middle', font: 'helvetica', lineWidth: 0.2, lineColor: [150, 150, 150] },
         headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', halign: 'center' },
-        columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 36, minCellHeight: 18 }, 10: { halign: 'center' } },
+        columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 32, minCellHeight: 18 }, 10: { cellWidth: 32, minCellHeight: 18 }, 11: { halign: 'center' } },
+        
+        // Fitur baru: Memperlebar tinggi baris tabel otomatis sesuai jumlah berkas
+        didParseCell: function(data) {
+          if (data.section === 'body' && data.column.index === 10) {
+            const trip = filteredHistory[data.row.index];
+            const numDocs = trip.referralDocs ? trip.referralDocs.length : (trip.referralDoc ? 1 : 0);
+            if (numDocs > 2) {
+              // Jika lebih dari 2 berkas, hitung baris tambahan yang dibutuhkan (2 file per baris)
+              const rowsNeeded = Math.ceil(numDocs / 2);
+              data.cell.styles.minCellHeight = (rowsNeeded * 16) + 4; 
+            }
+          }
+        },
+        
         didDrawCell: function(data) {
-          if (data.section === 'body' && data.column.index === 9) { 
+          if (data.section === 'body') { 
             const trip = filteredHistory[data.row.index]; let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
-            if (trip.kmStartPhoto) { try { doc.addImage(trip.kmStartPhoto, 'JPEG', xPos, yPos, imgSize, imgSize); } catch(e) {} }
-            if (trip.kmEndPhoto) { try { doc.addImage(trip.kmEndPhoto, 'JPEG', xPos + imgSize + 2, yPos, imgSize, imgSize); } catch(e) {} }
+            
+            // Render Foto Odometer (Kolom 9)
+            if (data.column.index === 9) {
+              if (trip.kmStartPhoto) { try { doc.addImage(trip.kmStartPhoto, 'JPEG', xPos, yPos, imgSize, imgSize); } catch(e) {} }
+              if (trip.kmEndPhoto) { try { doc.addImage(trip.kmEndPhoto, 'JPEG', xPos + imgSize + 2, yPos, imgSize, imgSize); } catch(e) {} }
+            }
+            
+            // Render Foto/Info Berkas Rujukan (Kolom 10)
+            if (data.column.index === 10) {
+              let startX = xPos;
+              let currentX = startX;
+              let currentY = yPos;
+              
+              if (trip.referralDocs && trip.referralDocs.length > 0) {
+                let count = 0;
+                for (let docItem of trip.referralDocs) {
+                  // Turun ke baris baru setiap 2 file (agar tidak tumpang tindih)
+                  if (count > 0 && count % 2 === 0) {
+                    currentX = startX;
+                    currentY += imgSize + 2;
+                  }
+                  if (docItem.type.startsWith('image/')) {
+                    try { doc.addImage(docItem.url, 'JPEG', currentX, currentY, imgSize, imgSize); } catch(e) {}
+                  } else {
+                    doc.setFontSize(7); doc.setTextColor(0, 0, 255); doc.text("PDF", currentX + 3, currentY + 8);
+                  }
+                  currentX += imgSize + 2; count++;
+                }
+              } else if (trip.referralDoc) {
+                if (trip.referralDocType?.startsWith('image/') || trip.referralDoc.startsWith('data:image')) {
+                  try { doc.addImage(trip.referralDoc, 'JPEG', currentX, currentY, imgSize, imgSize); } catch(e) {}
+                } else {
+                  doc.setFontSize(7); doc.setTextColor(0, 0, 255); doc.text("PDF", currentX + 3, currentY + 8);
+                }
+              }
+            }
           }
         }
       });
@@ -1068,6 +1135,295 @@ const App = () => {
       )
     }
     return null;
+  };
+
+  const handleDocumentUpload = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!user || !selectedTrip || files.length === 0) return;
+
+    // Ambil kategori dokumen dari pilihan dropdown
+    const categorySelect = document.getElementById('docCategory');
+    const category = categorySelect ? categorySelect.value : 'Berkas Lainnya';
+
+    setLoading(true); showToast('success', 'Memproses berkas rujukan...');
+
+    try {
+      const newDocs = [];
+      for (let file of files) {
+        let base64Data = "";
+        
+        if (file.type.startsWith('image/')) {
+          // Bypass batas 1MB. Biarkan fungsi compressImage yang bekerja memperkecil file
+          base64Data = await compressImage(file);
+        } else if (file.type === 'application/pdf') {
+          // Batas 1MB HANYA berlaku untuk PDF karena PDF tidak dikompres
+          if (file.size > 1048576) {
+            showToast('error', `Ukuran PDF ${file.name} melebihi batas 1MB.`);
+            continue;
+          }
+          base64Data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+          });
+        } else {
+           showToast('error', `Format ${file.name} tidak didukung. Harap upload PDF atau Foto.`);
+           continue;
+        }
+
+        newDocs.push({
+          id: Math.random().toString(36).substring(2, 9),
+          name: file.name,
+          type: file.type,
+          category: category,
+          url: base64Data
+        });
+      }
+
+      if (newDocs.length > 0) {
+        const currentDocs = selectedTrip.referralDocs || [];
+        
+        // Membawa data lama jika ada (migrasi otomatis untuk data yang sudah terlanjur dibuat)
+        if (selectedTrip.referralDoc && currentDocs.length === 0) {
+            currentDocs.push({
+                id: 'old-doc',
+                name: selectedTrip.referralDocName || 'Dokumen Rujukan',
+                type: selectedTrip.referralDocType || 'application/pdf',
+                category: 'Berkas Lama',
+                url: selectedTrip.referralDoc
+            });
+        }
+
+        const updatedDocs = [...currentDocs, ...newDocs];
+
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
+          referralDocs: updatedDocs,
+          referralDoc: null, // Hapus field lama agar bersih
+          referralDocName: null,
+          referralDocType: null
+        });
+
+        setSelectedTrip(prev => ({ ...prev, referralDocs: updatedDocs, referralDoc: null }));
+        showToast('success', `${newDocs.length} Berkas berhasil diunggah!`);
+      }
+    } catch (err) {
+      showToast('error', 'Gagal mengunggah berkas.');
+    } finally {
+      setLoading(false); e.target.value = '';
+    }
+  };
+
+  const removeDocument = async (docId) => {
+      if (!user || !selectedTrip) return;
+      setLoading(true);
+      try {
+          const currentDocs = selectedTrip.referralDocs || [];
+          const updatedDocs = currentDocs.filter(d => d.id !== docId);
+
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
+            referralDocs: updatedDocs
+          });
+
+          setSelectedTrip(prev => ({ ...prev, referralDocs: updatedDocs }));
+          showToast('success', 'Berkas berhasil dihapus.');
+      } catch(e) { showToast('error', 'Gagal menghapus berkas.'); } finally { setLoading(false); }
+  };
+
+  const downloadFile = (base64Data, fileName) => {
+    try {
+      // Cek apakah data berupa base64, lalu konversi ke Blob agar browser tidak macet (bug)
+      if (base64Data.startsWith('data:')) {
+        const arr = base64Data.split(',');
+        const mimeMatch = arr[0].match(/:(.*?);/);
+        if (!mimeMatch) throw new Error("Format base64 tidak valid");
+        const mime = mimeMatch[1];
+        const bstr = atob(arr[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        const url = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName || 'unduhan_berkas';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+      } else {
+        // Fallback jika berupa link biasa
+        const link = document.createElement('a');
+        link.href = base64Data;
+        link.download = fileName || 'unduhan_berkas';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+      showToast('success', 'Mempersiapkan unduhan berkas...');
+    } catch (error) {
+      showToast('error', 'Gagal mengunduh berkas.');
+    }
+  };
+
+  const uploadHistoryDocument = async (e, trip) => {
+    const files = Array.from(e.target.files);
+    if (!user || files.length === 0) return;
+
+    setLoading(true); showToast('success', 'Memproses Surat Balik...');
+
+    try {
+      const newDocs = [];
+      for (let file of files) {
+        let base64Data = "";
+        
+        if (file.type.startsWith('image/')) {
+          if (file.size > 10485760) {
+            showToast('error', `Ukuran Foto ${file.name} terlalu besar. (Maks 10MB)`);
+            continue;
+          }
+          base64Data = await compressImage(file);
+        } else if (file.type === 'application/pdf') {
+          if (file.size > 1048576) {
+            showToast('error', `Ukuran PDF ${file.name} melebihi batas 1MB.`);
+            continue;
+          }
+          base64Data = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = error => reject(error);
+          });
+        } else {
+           showToast('error', `Format ${file.name} tidak didukung.`);
+           continue;
+        }
+
+        newDocs.push({
+          id: Math.random().toString(36).substring(2, 9),
+          name: file.name,
+          type: file.type,
+          category: 'Surat Balik RS Tujuan', // Otomatis dilabeli kategori ini
+          url: base64Data
+        });
+      }
+
+      if (newDocs.length > 0) {
+        const currentDocs = trip.referralDocs || [];
+        
+        if (trip.referralDoc && currentDocs.length === 0) {
+            currentDocs.push({
+                id: 'old-doc',
+                name: trip.referralDocName || 'Dokumen Rujukan',
+                type: trip.referralDocType || 'application/pdf',
+                category: 'Berkas Lama',
+                url: trip.referralDoc
+            });
+        }
+
+        const updatedDocs = [...currentDocs, ...newDocs];
+
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', trip.id), {
+          referralDocs: updatedDocs,
+          referralDoc: null,
+          referralDocName: null,
+          referralDocType: null
+        });
+
+        showToast('success', `${newDocs.length} Surat Balik berhasil diunggah!`);
+      }
+    } catch (err) {
+      showToast('error', 'Gagal mengunggah Surat Balik.');
+    } finally {
+      setLoading(false); e.target.value = '';
+    }
+  };
+
+  const renderDocumentUploadPanel = () => {
+    const docs = selectedTrip?.referralDocs || [];
+    
+    // Fallback UI untuk file yang diunggah di versi sistem sebelumnya
+    if (docs.length === 0 && selectedTrip?.referralDoc) {
+       docs.push({
+          id: 'old-doc',
+          name: selectedTrip.referralDocName || 'Dokumen Rujukan',
+          type: selectedTrip.referralDocType || 'application/pdf',
+          category: 'Berkas Lama',
+          url: selectedTrip.referralDoc
+       });
+    }
+
+    return (
+      <div className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200 h-max">
+        <h4 className="text-sm font-black uppercase text-blue-900 tracking-widest flex items-center justify-between border-b border-slate-100 pb-4 mb-4">
+          <span className="flex items-center gap-2"><UploadCloud size={20} className="text-blue-600" /> Berkas Rujukan</span>
+          <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{docs.length} File</span>
+        </h4>
+
+        {/* List Berkas */}
+        {docs.length > 0 ? (
+          <div className="space-y-3 mb-4 max-h-[300px] overflow-y-auto pr-1 hide-scrollbar">
+            {docs.map((docItem) => (
+              <div key={docItem.id} className="flex items-center justify-between bg-blue-50 p-3 rounded-2xl border border-blue-100">
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <div className="bg-white p-2 rounded-xl text-blue-600 shadow-sm shrink-0">
+                    {docItem.type.startsWith('image/') ? <ImagePlus size={20} /> : <FileText size={20} />}
+                  </div>
+                  <div className="overflow-hidden flex-1">
+                    <p className="text-xs font-bold text-slate-800 truncate" title={docItem.name}>{docItem.name}</p>
+                    <p className="text-[9px] text-slate-500 uppercase font-bold mt-0.5">
+                      <span className="text-blue-600">{docItem.category}</span> • {docItem.type === 'application/pdf' ? 'PDF' : 'FOTO'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0 ml-2">
+                  <button onClick={() => downloadFile(docItem.url, docItem.name)} className="p-2 bg-white text-blue-600 hover:bg-blue-100 rounded-lg shadow-sm transition-colors" title="Unduh Berkas">
+                    <Download size={14} />
+                  </button>
+                  {role === 'nurse' && (
+                    <button onClick={() => removeDocument(docItem.id)} className="p-2 bg-white text-red-500 hover:bg-red-50 rounded-lg shadow-sm transition-colors" title="Hapus Berkas" disabled={loading}>
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          role !== 'nurse' && (
+            <div className="text-center p-6 bg-slate-50 rounded-2xl border border-slate-100 opacity-60">
+               <p className="text-xs font-bold text-slate-500">Belum ada berkas rujukan yang diunggah perawat.</p>
+            </div>
+          )
+        )}
+
+        {/* Area Upload Khusus Perawat */}
+        {role === 'nurse' && (
+          <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:bg-slate-50 transition-colors relative mt-2">
+            <div className="bg-slate-100 w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
+              <UploadCloud size={20} />
+            </div>
+            <p className="text-xs font-bold text-slate-600 mb-2">Tambah Berkas</p>
+
+            {/* Dropdown Kategori Berkas */}
+            <select id="docCategory" className="w-full max-w-[220px] mx-auto mb-3 text-[10px] p-2 rounded-xl border border-slate-200 outline-none focus:border-blue-500 text-slate-700 font-bold block bg-white cursor-pointer shadow-sm text-center">
+              <option value="Surat Pengantar Rujukan">📄 Surat Pengantar Rujukan</option>
+              <option value="Surat SISRUTE">🌐 Surat SISRUTE</option>
+              <option value="Berkas Lainnya">📎 Berkas Lainnya</option>
+            </select>
+
+            <label className="bg-blue-100 hover:bg-blue-200 text-blue-700 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase cursor-pointer transition-colors inline-block w-full max-w-[220px]">
+              Pilih Berkas
+              <input type="file" multiple accept=".pdf,image/png,image/jpeg,image/jpg" className="hidden" onChange={handleDocumentUpload} disabled={loading} />
+            </label>
+            <p className="text-[9px] text-slate-400 mt-2">Bisa pilih &gt; 1 file (Maks 1 MB / file)</p>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const renderTTVPanel = () => (
@@ -2043,7 +2399,7 @@ const App = () => {
                     </div>
                   ) : (
                     <div className="overflow-x-auto bg-white rounded-2xl border border-slate-200 shadow-sm w-full">
-                      <table className="w-full text-left border-collapse whitespace-nowrap min-w-[800px]">
+                      <table className="w-full text-left border-collapse whitespace-nowrap min-w-[900px]">
                         <thead>
                           <tr className="bg-slate-100 text-[10px] lg:text-xs font-black uppercase text-slate-600 border-b-2 border-slate-300">
                             <th className="p-4 text-center w-16 border border-slate-300">No</th>
@@ -2052,7 +2408,8 @@ const App = () => {
                             <th className="p-4 border border-slate-300">Rute Perjalanan</th>
                             <th className="p-4 border border-slate-300">Tim Medis</th>
                             <th className="p-4 text-center border border-slate-300">KM</th>
-                            <th className="p-4 text-center border border-slate-300">Bukti Foto</th>
+                            <th className="p-4 text-center border border-slate-300">Bukti Foto (KM)</th>
+                            <th className="p-4 text-center border border-slate-300">Berkas Rujukan</th>
                             <th className="p-4 text-center border border-slate-300">Durasi</th>
                           </tr>
                         </thead>
@@ -2083,6 +2440,8 @@ const App = () => {
                                   <span className="bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 block mb-1">{totalKm}</span>
                                   <span className="text-[9px] text-slate-400 font-bold block bg-white px-1 py-0.5 rounded border border-slate-100">{trip.kmStartValue || '-'} → {trip.kmEndValue || '-'}</span>
                                 </td>
+                                
+                                {/* KOLOM FOTO ODOMETER (Sebelumnya tidak sengaja terhapus) */}
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex items-center justify-center gap-2">
                                     {trip.kmStartPhoto ? (
@@ -2094,6 +2453,49 @@ const App = () => {
                                       <img src={trip.kmEndPhoto} alt="Akhir" className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative cursor-pointer shadow-sm re-invert" title={`KM Akhir: ${trip.kmEndValue}`} />
                                     ) : (
                                       <div className="w-10 h-10 bg-slate-100 rounded border border-slate-200 border-dashed flex items-center justify-center text-[8px] text-slate-400">N/A</div>
+                                    )}
+                                  </div>
+                                </td>
+
+                                {/* KOLOM BERKAS RUJUKAN & SURAT BALIK */}
+                                <td className="p-4 text-center border border-slate-200">
+                                  <div className="flex flex-col items-center gap-2">
+                                    {trip.referralDocs?.length > 0 ? (
+                                      <div className="flex flex-wrap justify-center gap-1.5 max-w-[150px] mx-auto">
+                                        {trip.referralDocs.map(docItem => (
+                                          docItem.type.startsWith('image/') ? (
+                                            <div key={docItem.id} className="relative group/doc cursor-pointer">
+                                              <img src={docItem.url} alt={docItem.name} onClick={() => downloadFile(docItem.url, docItem.name)} className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative shadow-sm re-invert" title={`Klik untuk Unduh Foto: ${docItem.name}`} />
+                                            </div>
+                                          ) : (
+                                            <button key={docItem.id} onClick={() => downloadFile(docItem.url, docItem.name)} className="flex items-center justify-center bg-blue-50 hover:bg-blue-100 text-blue-700 w-10 h-10 rounded border border-blue-200 transition-colors shadow-sm" title={`Unduh PDF: ${docItem.name}`}>
+                                              <FileText size={16} />
+                                            </button>
+                                          )
+                                        ))}
+                                      </div>
+                                    ) : trip.referralDoc ? (
+                                      <div className="flex justify-center">
+                                        {trip.referralDocType?.startsWith('image/') || trip.referralDoc.startsWith('data:image') ? (
+                                          <div className="relative group/doc cursor-pointer">
+                                            <img src={trip.referralDoc} alt={trip.referralDocName || 'berkas'} onClick={() => downloadFile(trip.referralDoc, trip.referralDocName || 'berkas_lama')} className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative shadow-sm re-invert" title={`Klik untuk Unduh Foto: ${trip.referralDocName || 'Berkas Lama'}`} />
+                                          </div>
+                                        ) : (
+                                          <button onClick={() => downloadFile(trip.referralDoc, trip.referralDocName || 'berkas_lama')} className="flex items-center justify-center bg-blue-50 hover:bg-blue-100 text-blue-700 w-10 h-10 rounded border border-blue-200 transition-colors shadow-sm" title={trip.referralDocName || 'Berkas Rujukan'}>
+                                            <FileText size={16} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 font-medium">N/A</span>
+                                    )}
+
+                                    {/* Tombol Khusus Upload Surat Balik di Riwayat */}
+                                    {role === 'nurse' && (
+                                      <label className="mt-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase cursor-pointer transition-colors shadow-sm inline-flex items-center gap-1.5 w-max">
+                                        <UploadCloud size={12} /> + Surat Balik
+                                        <input type="file" multiple accept=".pdf,image/png,image/jpeg,image/jpg" className="hidden" onChange={(e) => uploadHistoryDocument(e, trip)} disabled={loading} />
+                                      </label>
                                     )}
                                   </div>
                                 </td>
@@ -2185,10 +2587,16 @@ const App = () => {
                     {(role === 'nurse' && selectedTrip.serviceType !== 'jenazah') ? (
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         {renderTTVPanel()}
-                        {renderEConsentPanel()}
+                        <div className="flex flex-col gap-6">
+                          {renderEConsentPanel()}
+                          {renderDocumentUploadPanel()}
+                        </div>
                       </div>
                     ) : (
-                      renderEConsentPanel()
+                      <div className="flex flex-col gap-6">
+                        {renderEConsentPanel()}
+                        {selectedTrip.serviceType !== 'jenazah' && renderDocumentUploadPanel()}
+                      </div>
                     )}
                     <div className="w-full">
                       {renderChatPanel()}
@@ -2225,4 +2633,3 @@ const App = () => {
 };
 
 export default App;
-
