@@ -1,8 +1,9 @@
-name: Deploy to Firebase Hosting
+name: Build & Deploy (Web & Android)
 on:
   push:
     branches:
       - main
+
 jobs:
   build_and_deploy:
     runs-on: ubuntu-latest
@@ -12,16 +13,43 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22  # Update ke versi 22 sesuai kebutuhan Capacitor
+          node-version: 22
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm install  # Menggunakan install agar lock file sinkron otomatis
+        run: npm install
 
-      - name: Build Proyek
+      - name: Build Web Application
         run: npm run build
 
-      - name: Deploy ke Firebase
+      # --- TAHAP BUILD ANDROID ---
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Build Android APK (Debug)
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # --- TAHAP UPLOAD APK SEBAGAI ARTIFACT ---
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SI-ELANG-Android-App
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      # --- TAHAP DEPLOY KE FIREBASE HOSTING ---
+      - name: Deploy to Firebase Hosting
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'
