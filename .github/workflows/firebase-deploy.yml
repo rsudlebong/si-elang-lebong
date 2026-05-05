@@ -12,11 +12,11 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22  # Update ke v22 untuk mendukung Capacitor 8.3.0
           cache: 'npm'
 
-      - name: Install Dependencies
-        run: npm install
+      - name: Sync & Install Dependencies
+        run: npm install  # Menggantikan 'npm ci' untuk sinkronisasi otomatis
 
       - name: Build Proyek
         run: npm run build
