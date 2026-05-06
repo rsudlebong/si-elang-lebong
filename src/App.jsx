@@ -153,53 +153,12 @@ const calculateEWS = (vitals) => {
 };
 
 const triggerDownload = async (blob, fileName) => {
-  const cap = window.Capacitor;
-  
-  // 1. CEK PLATFORM: Apakah berjalan di aplikasi Android (Native Capacitor)?
-  if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = async () => {
-        const base64data = reader.result.split(',')[1];
-        // Mengakses plugin via window.Capacitor.Plugins untuk menghindari error resolusi saat build
-        const Filesystem = cap.Plugins.Filesystem;
-        const Share = cap.Plugins.Share;
-        
-        if (Filesystem && Share) {
-          const savedFile = await Filesystem.writeFile({
-            path: fileName,
-            data: base64data,
-            directory: 'CACHE'
-          });
-
-          await Share.share({
-            title: fileName,
-            url: savedFile.uri,
-            dialogTitle: 'Buka atau Simpan File Laporan'
-          });
-        } else {
-            // Jika plugin tidak tersedia, coba fallback browser
-            downloadFallback(blob, fileName);
-        }
-      };
-      return; 
-    } catch (e) {
-      console.error("Native download error:", e);
-      downloadFallback(blob, fileName);
-    }
-  } else {
-      downloadFallback(blob, fileName);
-  }
-};
-
-const downloadFallback = (blob, fileName) => {
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   if (isMobile && navigator.share && navigator.canShare) {
     try {
       const file = new File([blob], fileName, { type: blob.type });
       if (navigator.canShare({ files: [file] })) {
-        navigator.share({
+        await navigator.share({
           files: [file],
           title: fileName,
         });
@@ -321,6 +280,7 @@ const App = () => {
   const [fullScreenMapId, setFullScreenMapId] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
+  // Tambahan Ref untuk membatasi pengiriman GPS ke Firebase
   const lastGpsUpdate = useRef(0);
 
   const performLogout = useCallback(() => { 
@@ -457,7 +417,11 @@ const App = () => {
     return () => { unsubscribe(); clearInterval(intervalId); document.removeEventListener('click', unlockAudio); document.removeEventListener('touchstart', unlockAudio); if (alarmAudio.current) alarmAudio.current.pause(); };
   }, []);
 
+  // PERBAIKAN READ LEAKS (Kebocoran kuota baca data Firebase)
   useEffect(() => {
+    // Hanya lakukan subscribe JIKA user sudah berhasil login (username terisi).
+    // KITA MENGHAPUS 'view' DARI DEPENDENSI agar perpindahan halaman/menu 
+    // TIDAK memicu unduh/subscribe ulang ke seluruh database.
     if (!user || !username) return; 
     
     const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
@@ -484,7 +448,7 @@ const App = () => {
     );
 
     return () => { unsubscribeUsers(); unsubscribeTrips(); };
-  }, [user, username]);
+  }, [user, username]); // Dependensi dirubah menjadi 'username' bukan 'view'
 
   useEffect(() => {
     if (!user || !user.uid || !username) return;
@@ -557,6 +521,7 @@ const App = () => {
 
   const activeTripId = activeTrips.find(t => t.status === 'OTW' && t.driverId === username)?.id;
   
+  // PERBAIKAN WRITE LEAKS (Kebocoran kuota tulis GPS Firebase)
   useEffect(() => {
     let watchId;
     if (role === 'driver' && activeTripId && user && isOnline) {
@@ -564,6 +529,8 @@ const App = () => {
         watchId = navigator.geolocation.watchPosition(
           async (pos) => {
             const now = Date.now();
+            // Batasi pengiriman lokasi ke Firebase HANYA SETIAP 15 DETIK SEKALI
+            // Hal ini secara drastis menghemat kuota Writes Firebase
             if (now - lastGpsUpdate.current < 15000) return;
 
             try { 
@@ -916,7 +883,17 @@ const App = () => {
       }
 
       const { jsPDF } = window.jspdf; const doc = new jsPDF('landscape');
-      const pageWidth = doc.internal.pageSize.getWidth();
+      const fetchImageBase64 = async (url) => {
+        return new Promise((resolve) => {
+          const img = new Image(); img.crossOrigin = 'Anonymous'; 
+          img.onload = () => { const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height; const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL('image/png')); };
+          img.onerror = async () => { try { const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`; const res = await fetch(proxyUrl); const blob = await res.blob(); if (!blob.type.startsWith('image/')) throw new Error('Format salah'); const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob); } catch (e) { resolve(null); } };
+          img.src = `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}&output=png&w=1000&q=100`;
+        });
+      };
+
+      const logoBase64 = await fetchImageBase64(LOGO_URL); const pageWidth = doc.internal.pageSize.getWidth();
+      if (logoBase64) { try { doc.addImage(logoBase64, 'PNG', 14, 5, 65, 26); } catch(e) {} }
 
       let judulUtama = 'REKAPITULASI LAYANAN AMBULANS';
       if (historyServiceFilter === 'rujukan') judulUtama = 'REKAPITULASI RUJUKAN';
@@ -958,11 +935,13 @@ const App = () => {
         headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', halign: 'center' },
         columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 32, minCellHeight: 18 }, 10: { cellWidth: 32, minCellHeight: 18 }, 11: { halign: 'center' } },
         
+        // Fitur baru: Memperlebar tinggi baris tabel otomatis sesuai jumlah berkas
         didParseCell: function(data) {
           if (data.section === 'body' && data.column.index === 10) {
             const trip = filteredHistory[data.row.index];
             const numDocs = trip.referralDocs ? trip.referralDocs.length : (trip.referralDoc ? 1 : 0);
             if (numDocs > 2) {
+              // Jika lebih dari 2 berkas, hitung baris tambahan yang dibutuhkan (2 file per baris)
               const rowsNeeded = Math.ceil(numDocs / 2);
               data.cell.styles.minCellHeight = (rowsNeeded * 16) + 4; 
             }
@@ -973,11 +952,13 @@ const App = () => {
           if (data.section === 'body') { 
             const trip = filteredHistory[data.row.index]; let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
             
+            // Render Foto Odometer (Kolom 9)
             if (data.column.index === 9) {
               if (trip.kmStartPhoto) { try { doc.addImage(trip.kmStartPhoto, 'JPEG', xPos, yPos, imgSize, imgSize); } catch(e) {} }
               if (trip.kmEndPhoto) { try { doc.addImage(trip.kmEndPhoto, 'JPEG', xPos + imgSize + 2, yPos, imgSize, imgSize); } catch(e) {} }
             }
             
+            // Render Foto/Info Berkas Rujukan (Kolom 10)
             if (data.column.index === 10) {
               let startX = xPos;
               let currentX = startX;
@@ -986,6 +967,7 @@ const App = () => {
               if (trip.referralDocs && trip.referralDocs.length > 0) {
                 let count = 0;
                 for (let docItem of trip.referralDocs) {
+                  // Turun ke baris baru setiap 2 file (agar tidak tumpang tindih)
                   if (count > 0 && count % 2 === 0) {
                     currentX = startX;
                     currentY += imgSize + 2;
@@ -1200,6 +1182,7 @@ const App = () => {
     const files = Array.from(e.target.files);
     if (!user || !selectedTrip || files.length === 0) return;
 
+    // Ambil kategori dokumen dari pilihan dropdown
     const categorySelect = document.getElementById('docCategory');
     const category = categorySelect ? categorySelect.value : 'Berkas Lainnya';
 
@@ -1211,8 +1194,10 @@ const App = () => {
         let base64Data = "";
         
         if (file.type.startsWith('image/')) {
+          // Bypass batas 1MB. Biarkan fungsi compressImage yang bekerja memperkecil file
           base64Data = await compressImage(file);
         } else if (file.type === 'application/pdf') {
+          // Batas 1MB HANYA berlaku untuk PDF karena PDF tidak dikompres
           if (file.size > 1048576) {
             showToast('error', `Ukuran PDF ${file.name} melebihi batas 1MB.`);
             continue;
@@ -1240,6 +1225,7 @@ const App = () => {
       if (newDocs.length > 0) {
         const currentDocs = selectedTrip.referralDocs || [];
         
+        // Membawa data lama jika ada (migrasi otomatis untuk data yang sudah terlanjur dibuat)
         if (selectedTrip.referralDoc && currentDocs.length === 0) {
             currentDocs.push({
                 id: 'old-doc',
@@ -1254,7 +1240,7 @@ const App = () => {
 
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
           referralDocs: updatedDocs,
-          referralDoc: null, 
+          referralDoc: null, // Hapus field lama agar bersih
           referralDocName: null,
           referralDocType: null
         });
@@ -1349,7 +1335,7 @@ const App = () => {
           id: Math.random().toString(36).substring(2, 9),
           name: file.name,
           type: file.type,
-          category: 'Surat Balik RS Tujuan', 
+          category: 'Surat Balik RS Tujuan', // Otomatis dilabeli kategori ini
           url: base64Data
         });
       }
@@ -1388,6 +1374,7 @@ const App = () => {
   const renderDocumentUploadPanel = () => {
     const docs = selectedTrip?.referralDocs || [];
     
+    // Fallback UI untuk file yang diunggah di versi sistem sebelumnya
     if (docs.length === 0 && selectedTrip?.referralDoc) {
        docs.push({
          id: 'old-doc',
@@ -1405,6 +1392,7 @@ const App = () => {
           <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{docs.length} File</span>
         </h4>
 
+        {/* List Berkas */}
         {docs.length > 0 ? (
           <div className="space-y-3 mb-4 max-h-[300px] overflow-y-auto pr-1 hide-scrollbar">
             {docs.map((docItem) => (
@@ -1441,6 +1429,7 @@ const App = () => {
           )
         )}
 
+        {/* Area Upload Khusus Perawat */}
         {role === 'nurse' && (
           <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:bg-slate-50 transition-colors relative mt-2">
             <div className="bg-slate-100 w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
@@ -1448,6 +1437,7 @@ const App = () => {
             </div>
             <p className="text-xs font-bold text-slate-600 mb-2">Tambah Berkas</p>
 
+            {/* Dropdown Kategori Berkas */}
             <select id="docCategory" className="w-full max-w-[220px] mx-auto mb-3 text-[10px] p-2 rounded-xl border border-slate-200 outline-none focus:border-blue-500 text-slate-700 font-bold block bg-white cursor-pointer shadow-sm text-center">
               <option value="Surat Pengantar Rujukan">📄 Surat Pengantar Rujukan</option>
               <option value="Surat SISRUTE">🌐 Surat SISRUTE</option>
@@ -2480,6 +2470,7 @@ const App = () => {
                                   <span className="text-[9px] text-slate-400 font-bold block bg-white px-1 py-0.5 rounded border border-slate-100">{trip.kmStartValue || '-'} → {trip.kmEndValue || '-'}</span>
                                 </td>
                                 
+                                {/* KOLOM FOTO ODOMETER (Sebelumnya tidak sengaja terhapus) */}
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex items-center justify-center gap-2">
                                     {trip.kmStartPhoto ? (
@@ -2495,6 +2486,7 @@ const App = () => {
                                   </div>
                                 </td>
 
+                                {/* KOLOM BERKAS RUJUKAN & SURAT BALIK */}
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex flex-col items-center gap-2">
                                     {trip.referralDocs?.length > 0 ? (
@@ -2527,6 +2519,7 @@ const App = () => {
                                       <span className="text-[10px] text-slate-400 font-medium">N/A</span>
                                     )}
 
+                                    {/* Tombol Khusus Upload Surat Balik di Riwayat */}
                                     {role === 'nurse' && (
                                       <label className="mt-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase cursor-pointer transition-colors shadow-sm inline-flex items-center gap-1.5 w-max">
                                         <UploadCloud size={12} /> + Surat Balik
