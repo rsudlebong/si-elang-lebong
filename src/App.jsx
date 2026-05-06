@@ -1511,7 +1511,7 @@ const App = () => {
 
         <div className="w-full max-w-md bg-white/80 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white relative z-10 flex flex-col">
           <div className="flex flex-col items-center mb-6 mt-2 w-full">
-            <img src={LOGO_URL} alt="Logo" className="w-[90%] max-w-[350px] h-auto object-contain mb-4 transition-all mix-blend-multiply re-invert" />
+            <img src={LOGO_URL} onError={(e) => { e.target.onerror = null; e.target.src = "https://via.placeholder.com/300x100.png?text=SI-ELANG"; }} alt="Logo" className="w-[90%] max-w-[350px] h-auto object-contain mb-4 transition-all mix-blend-multiply re-invert" />
           </div>
 
           {!isRegistering ? (
@@ -1709,7 +1709,7 @@ const App = () => {
 
       <aside className="hidden lg:flex flex-col w-[280px] bg-white text-slate-600 transition-all shadow-[4px_0_24px_rgba(0,0,0,0.03)] z-40 flex-shrink-0 relative border-r border-slate-200">
         <div className="p-6 border-b border-slate-100 flex flex-col items-center justify-center bg-white sticky top-0 z-10 text-center">
-          <img src={LOGO_URL} className="w-full px-2 max-w-[260px] h-auto object-contain mb-2 mix-blend-multiply re-invert" alt="Logo" />
+          <img src={LOGO_URL} onError={(e) => { e.target.onerror = null; e.target.src = "https://via.placeholder.com/300x100.png?text=SI-ELANG"; }} className="w-full px-2 max-w-[260px] h-auto object-contain mb-2 mix-blend-multiply re-invert" alt="Logo" />
           <div>
             <p className="text-[10px] text-blue-600 font-bold uppercase tracking-widest bg-blue-50 px-3 py-1 rounded inline-block mt-1">
               {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
@@ -1781,21 +1781,21 @@ const App = () => {
       </aside>
 
       <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-slate-50/50">
-        <header className="lg:hidden bg-white/90 backdrop-blur-md sticky top-0 z-50 p-4 border-b border-slate-200 flex justify-between items-center shadow-sm">
-          <div className="flex items-center gap-3 w-full">
-            <img src={LOGO_URL} alt="SI-ELANG" className="w-[180px] sm:w-[220px] h-auto max-h-[100px] object-contain shrink-0 mix-blend-multiply re-invert" />
-            <div className="flex flex-col justify-center">
-              <p className="font-bold text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100">
+        <header className="lg:hidden bg-white/90 backdrop-blur-md sticky top-0 z-50 p-3 sm:p-4 border-b border-slate-200 flex justify-between items-center shadow-sm gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
+            <img src={LOGO_URL} onError={(e) => { e.target.onerror = null; e.target.src = "https://via.placeholder.com/300x100.png?text=SI-ELANG"; }} alt="SI-ELANG" className="w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply re-invert" />
+            <div className="flex flex-col justify-center overflow-hidden">
+              <p className="font-bold text-[9px] sm:text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100 truncate">
                 {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
               </p>
             </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={() => setDarkMode(!darkMode)} className="bg-slate-100 p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-all shrink-0">
-              {darkMode ? <Sun size={20} /> : <Moon size={20} />}
+          <div className="flex gap-1.5 sm:gap-2 shrink-0">
+            <button onClick={() => setDarkMode(!darkMode)} className="bg-slate-100 p-2 sm:p-2.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-all shrink-0">
+              {darkMode ? <Sun size={18} /> : <Moon size={20} />}
             </button>
-            <button onClick={handleLogout} className="bg-red-50 p-2.5 rounded-xl text-red-600 hover:text-white hover:bg-red-600 transition-all shrink-0">
-              <LogOut size={20} />
+            <button onClick={handleLogout} className="bg-red-50 p-2 sm:p-2.5 rounded-xl text-red-600 hover:text-white hover:bg-red-600 transition-all shrink-0">
+              <LogOut size={18} />
             </button>
           </div>
         </header>
