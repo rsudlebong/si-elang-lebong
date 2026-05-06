@@ -152,6 +152,33 @@ const calculateEWS = (vitals) => {
   return { score, status: 'Kondisi Stabil', color: 'bg-emerald-500', text: 'text-emerald-600' };
 };
 
+const triggerDownload = async (blob, fileName) => {
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  if (isMobile && navigator.share && navigator.canShare) {
+    try {
+      const file = new File([blob], fileName, { type: blob.type });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: fileName,
+        });
+        return;
+      }
+    } catch (e) {
+      console.log("Share API failed", e);
+    }
+  }
+  
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => window.URL.revokeObjectURL(url), 100);
+};
+
 const NativeMapRender = ({ lat, lng, mapId }) => {
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -795,11 +822,7 @@ const App = () => {
     if (!filteredHistory.length) { showToast('error', 'Tidak ada data diunduh.'); return; }
     showToast('success', 'Menyusun dokumen Excel...');
     try {
-      if (!window.TableToExcel) {
-        const script = document.createElement('script'); script.src = 'https://cdn.jsdelivr.net/gh/linways/table-to-excel@1.0.4/dist/tableToExcel.js';
-        await new Promise((res, rej) => { script.onload = res; script.onerror = rej; document.head.appendChild(script); });
-      }
-      const table = document.createElement('table'); table.setAttribute('data-cols-width', '5,12,10,10,12,10,20,20,15,15,15,15,15,10,15,30,15,10');
+      const table = document.createElement('table'); table.setAttribute('border', '1');
       let html = `<thead><tr>
         <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">No</th><th style="font-weight:bold; background-color:#f1f5f9;">Tanggal</th>
         <th style="font-weight:bold; background-color:#f1f5f9;">Berangkat</th><th style="font-weight:bold; background-color:#f1f5f9;">Tiba</th>
@@ -825,9 +848,14 @@ const App = () => {
           <td style="text-align:center;">${getDuration(t.startTime, t.endTime)}</td>
         </tr>`;
       });
-      html += `</tbody>`; table.innerHTML = html; document.body.appendChild(table);
-      window.TableToExcel.convert(table, { name: `Rekap_${historyFilter}.xlsx`, sheet: { name: "Riwayat Layanan" } });
-      document.body.removeChild(table); showToast('success', 'Excel berhasil diunduh!');
+      html += `</tbody>`; table.innerHTML = html;
+      
+      const template = '<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="UTF-8"><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Riwayat Layanan</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body><table>{table}</table></body></html>';
+      const htmlString = template.replace('{table}', table.innerHTML);
+      const blob = new Blob([htmlString], { type: 'application/vnd.ms-excel' });
+      
+      await triggerDownload(blob, `Rekap_${historyFilter}.xls`);
+      showToast('success', 'Excel berhasil diunduh!');
     } catch (err) { showToast('error', 'Gagal membuat file Excel.'); }
   };
 
@@ -955,7 +983,10 @@ const App = () => {
 
       const pageCount = doc.internal.getNumberOfPages();
       for(let i = 1; i <= pageCount; i++) { doc.setPage(i); doc.setFontSize(8); doc.setTextColor(150); doc.text(`Dicetak secara otomatis oleh Sistem SI-ELANG pada ${new Date().toLocaleString('id-ID')}`, 14, doc.internal.pageSize.height - 10); }
-      doc.save(`Laporan_SI-ELANG_${historyFilter}.pdf`); showToast('success', 'PDF berhasil diunduh!');
+      
+      const pdfBlob = doc.output('blob');
+      await triggerDownload(pdfBlob, `Laporan_SI-ELANG_${historyFilter}.pdf`);
+      showToast('success', 'PDF berhasil diunduh!');
     } catch (err) { showToast('error', 'Gagal membuat PDF.'); }
   };
 
@@ -1230,9 +1261,10 @@ const App = () => {
       } catch(e) { showToast('error', 'Gagal menghapus berkas.'); } finally { setLoading(false); }
   };
 
-  const downloadFile = (base64Data, fileName) => {
+  const downloadFile = async (base64Data, fileName) => {
     try {
-      // Cek apakah data berupa base64, lalu konversi ke Blob agar browser tidak macet (bug)
+      showToast('success', 'Mempersiapkan unduhan berkas...');
+      let blob;
       if (base64Data.startsWith('data:')) {
         const arr = base64Data.split(',');
         const mimeMatch = arr[0].match(/:(.*?);/);
@@ -1244,26 +1276,13 @@ const App = () => {
         while (n--) {
           u8arr[n] = bstr.charCodeAt(n);
         }
-        const blob = new Blob([u8arr], { type: mime });
-        const url = URL.createObjectURL(blob);
-        
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = fileName || 'unduhan_berkas';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        setTimeout(() => URL.revokeObjectURL(url), 100);
+        blob = new Blob([u8arr], { type: mime });
       } else {
-        // Fallback jika berupa link biasa
-        const link = document.createElement('a');
-        link.href = base64Data;
-        link.download = fileName || 'unduhan_berkas';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        const response = await fetch(base64Data);
+        blob = await response.blob();
       }
-      showToast('success', 'Mempersiapkan unduhan berkas...');
+      
+      await triggerDownload(blob, fileName || 'unduhan_berkas');
     } catch (error) {
       showToast('error', 'Gagal mengunduh berkas.');
     }
@@ -1348,11 +1367,11 @@ const App = () => {
     // Fallback UI untuk file yang diunggah di versi sistem sebelumnya
     if (docs.length === 0 && selectedTrip?.referralDoc) {
        docs.push({
-          id: 'old-doc',
-          name: selectedTrip.referralDocName || 'Dokumen Rujukan',
-          type: selectedTrip.referralDocType || 'application/pdf',
-          category: 'Berkas Lama',
-          url: selectedTrip.referralDoc
+         id: 'old-doc',
+         name: selectedTrip.referralDocName || 'Dokumen Rujukan',
+         type: selectedTrip.referralDocType || 'application/pdf',
+         category: 'Berkas Lama',
+         url: selectedTrip.referralDoc
        });
     }
 
