@@ -153,6 +153,46 @@ const calculateEWS = (vitals) => {
 };
 
 const triggerDownload = async (blob, fileName) => {
+  const cap = window.Capacitor;
+  
+  // 1. CEK: Jika berjalan di Aplikasi Android (Native Capacitor)
+  if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {
+        const base64data = reader.result.split(',')[1];
+        const Filesystem = cap.Plugins.Filesystem;
+        const Share = cap.Plugins.Share;
+        
+        if (Filesystem && Share) {
+          const savedFile = await Filesystem.writeFile({
+            path: fileName,
+            data: base64data,
+            directory: 'CACHE'
+          });
+
+          await Share.share({
+            title: fileName,
+            url: savedFile.uri,
+            dialogTitle: 'Buka atau Simpan File Laporan'
+          });
+        } else {
+          downloadFallback(blob, fileName);
+        }
+      };
+      return; 
+    } catch (e) {
+      console.error("Native download error:", e);
+      downloadFallback(blob, fileName);
+    }
+  } else {
+    // 2. CEK: Jika berjalan di Browser / Web
+    downloadFallback(blob, fileName);
+  }
+};
+
+const downloadFallback = async (blob, fileName) => {
   const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   if (isMobile && navigator.share && navigator.canShare) {
     try {
@@ -189,6 +229,38 @@ const handleLogoError = (e) => {
   }
 };
 
+// --- FUNGSI MENGAMBIL LOGO (DIPERBARUI DENGAN CDN ANTI-CORS) ---
+const getSafeBase64Logo = async () => {
+  try {
+    // Kita ambil langsung dari LOGO_URL (Google Drive) milik Anda,
+    // namun dilewatkan melalui CDN terpercaya (weserv) agar terbebas dari blokir keamanan Android.
+    const cdnUrl = `https://images.weserv.nl/?url=${encodeURIComponent(LOGO_URL)}&output=png`;
+    
+    const response = await fetch(cdnUrl);
+    if (!response.ok) throw new Error('Gagal mengambil logo dari CDN');
+    
+    const blob = await response.blob();
+    
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        let res = reader.result;
+        // Pastikan format akhirnya adalah base64 image/png
+        if (res && res.includes('base64,')) {
+           const base64Data = res.split('base64,')[1];
+           resolve(`data:image/png;base64,${base64Data}`);
+        } else {
+           resolve(null);
+        }
+      };
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.error("Logo gagal dimuat:", e);
+    return null; // Jika ini pun gagal, Lapis 3 (Teks SI-ELANG biru) akan otomatis muncul di fungsi PDF/Excel
+  }
+};
+
 const NativeMapRender = ({ lat, lng, mapId }) => {
   const mapRef = useRef(null);
   const markerRef = useRef(null);
@@ -199,7 +271,10 @@ const NativeMapRender = ({ lat, lng, mapId }) => {
     if (!mapRef.current) {
       mapRef.current = window.L.map(mapId).setView([lat, lng], 14);
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapRef.current);
-      const ambIcon = window.L.icon({ iconUrl: 'https://cdn-icons-png.flaticon.com/512/1013/1013444.png', iconSize: [40, 40] });
+      
+      // MENGGANTI IKON KERANJANG MENJADI AMBULANS
+      const ambIcon = window.L.icon({ iconUrl: 'https://img.icons8.com/color/96/ambulance.png', iconSize: [45, 45], iconAnchor: [22, 22] });
+      
       markerRef.current = window.L.marker([lat, lng], { icon: ambIcon }).addTo(mapRef.current).bindPopup("Ambulans Live").openPopup();
     } else {
       mapRef.current.setView([lat, lng]);
@@ -280,10 +355,10 @@ const App = () => {
   const [fullScreenMapId, setFullScreenMapId] = useState(null);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   
-  // Tambahan Ref untuk membatasi pengiriman GPS ke Firebase
   const lastGpsUpdate = useRef(0);
 
   const performLogout = useCallback(() => { 
+    localStorage.removeItem('si_elang_session'); // Hapus sesi lokal saat logout
     setView('login'); 
     setRole(null); 
     setUsername(null); 
@@ -296,6 +371,21 @@ const App = () => {
 
   const handleLogout = useCallback(() => {
     setShowLogoutConfirm(true);
+  }, []);
+
+  // CEK SESI TERSIMPAN SAAT APLIKASI DIBUKA (Auto-Login jika di-Swipe)
+  useEffect(() => {
+    const savedSession = localStorage.getItem('si_elang_session');
+    if (savedSession) {
+      try {
+        const { u, role: savedRole } = JSON.parse(savedSession);
+        setUsername(u);
+        setRole(savedRole);
+        setView(savedRole === 'superadmin' ? 'superadmin' : (savedRole === 'management' ? 'management' : 'home'));
+      } catch (e) {
+        localStorage.removeItem('si_elang_session');
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -417,11 +507,7 @@ const App = () => {
     return () => { unsubscribe(); clearInterval(intervalId); document.removeEventListener('click', unlockAudio); document.removeEventListener('touchstart', unlockAudio); if (alarmAudio.current) alarmAudio.current.pause(); };
   }, []);
 
-  // PERBAIKAN READ LEAKS (Kebocoran kuota baca data Firebase)
   useEffect(() => {
-    // Hanya lakukan subscribe JIKA user sudah berhasil login (username terisi).
-    // KITA MENGHAPUS 'view' DARI DEPENDENSI agar perpindahan halaman/menu 
-    // TIDAK memicu unduh/subscribe ulang ke seluruh database.
     if (!user || !username) return; 
     
     const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
@@ -448,7 +534,7 @@ const App = () => {
     );
 
     return () => { unsubscribeUsers(); unsubscribeTrips(); };
-  }, [user, username]); // Dependensi dirubah menjadi 'username' bukan 'view'
+  }, [user, username]);
 
   useEffect(() => {
     if (!user || !user.uid || !username) return;
@@ -491,6 +577,7 @@ const App = () => {
     return () => { if (wakeLock.current) wakeLock.current.release().catch(()=>{}); if (bgKeepAlive.current) bgKeepAlive.current.pause(); document.removeEventListener('visibilitychange', handleVisibilityChange); }
   }, [role, dailyCheck]);
 
+  // PENDETEKSI PANGGILAN DARURAT & NOTIFIKASI
   useEffect(() => {
     if (role === 'driver' && user && dailyCheck) {
       const isBusy = activeTrips.some(t => t.status === 'OTW' && t.driverId === username);
@@ -500,16 +587,53 @@ const App = () => {
       if (pendingTrips.length > 0) {
         const newCall = pendingTrips[0];
         setIncomingCall(newCall);
+        
+        // 1. Play Audio Web (Jika aplikasi sedang terbuka)
         if (alarmAudio.current && alarmAudio.current.paused && audioUnlocked.current) alarmAudio.current.play().catch(() => {});
 
         if (notifiedTripId.current !== newCall.id) {
-          if ('Notification' in window && Notification.permission === 'granted') {
-            const titleText = newCall.serviceType === 'jenazah' ? '⚰️ MOBIL JENAZAH DIBUTUHKAN!' : '🚨 PANGGILAN DARURAT AMBULANS!';
-            const safeName = newCall.patientName.substring(0, 3) + '***';
-            const bodyText = `Pasien: ${safeName}\nRute: ${newCall.origin} -> ${newCall.destination}`;
+          const titleText = newCall.serviceType === 'jenazah' ? '⚰️ MOBIL JENAZAH DIBUTUHKAN!' : '🚨 PANGGILAN DARURAT AMBULANS!';
+          const safeName = newCall.patientName.substring(0, 3) + '***';
+          const bodyText = `Pasien: ${safeName}\nRute: ${newCall.origin} -> ${newCall.destination}`;
+
+          const cap = window.Capacitor;
+          
+          // 2. TRIGGER NOTIFIKASI ALARM NATIVE ANDROID
+          if (cap && cap.isNativePlatform() && cap.Plugins && cap.Plugins.LocalNotifications) {
+            const LocalNotifications = cap.Plugins.LocalNotifications;
+            
+            // Minta Izin Notifikasi (Untuk Android 13+)
+            LocalNotifications.requestPermissions().then((perm) => {
+              if (perm.display === 'granted') {
+                // Buat Channel Khusus Darurat (Penting agar notif muncul sebagai Popup/Heads-up)
+                LocalNotifications.createChannel({
+                  id: 'emergency-alarms',
+                  name: 'Alarm Darurat SI-ELANG',
+                  description: 'Notifikasi Panggilan Ambulans',
+                  importance: 5, // 5 = MAX (Akan muncul melayang di layar dan berbunyi)
+                  visibility: 1, // Muncul di Lockscreen
+                  vibration: true
+                }).then(() => {
+                  // Tembakkan Notifikasinya
+                  LocalNotifications.schedule({
+                    notifications: [{
+                      title: titleText,
+                      body: bodyText,
+                      id: Math.floor(Math.random() * 100000),
+                      channelId: 'emergency-alarms',
+                      schedule: { at: new Date(Date.now() + 500) } // Muncul seketika
+                    }]
+                  });
+                });
+              }
+            });
+          } 
+          // 3. Fallback Notifikasi Browser (Web)
+          else if ('Notification' in window && Notification.permission === 'granted') {
             if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(sw => sw.showNotification(titleText, { body: bodyText, icon: LOGO_URL, vibrate: [500, 250, 500, 250, 1000], requireInteraction: true, tag: 'emergency-call', renotify: true })).catch(()=>{});
             else { const notif = new Notification(titleText, { body: bodyText, icon: LOGO_URL, requireInteraction: true }); notif.onclick = () => { window.focus(); notif.close(); }; }
           }
+          
           notifiedTripId.current = newCall.id;
         }
       } else {
@@ -521,7 +645,6 @@ const App = () => {
 
   const activeTripId = activeTrips.find(t => t.status === 'OTW' && t.driverId === username)?.id;
   
-  // PERBAIKAN WRITE LEAKS (Kebocoran kuota tulis GPS Firebase)
   useEffect(() => {
     let watchId;
     if (role === 'driver' && activeTripId && user && isOnline) {
@@ -529,8 +652,6 @@ const App = () => {
         watchId = navigator.geolocation.watchPosition(
           async (pos) => {
             const now = Date.now();
-            // Batasi pengiriman lokasi ke Firebase HANYA SETIAP 15 DETIK SEKALI
-            // Hal ini secara drastis menghemat kuota Writes Firebase
             if (now - lastGpsUpdate.current < 15000) return;
 
             try { 
@@ -577,6 +698,9 @@ const App = () => {
     if (userFound) {
       const hashedInput = await hashPassword(p);
       if (userFound.pass === hashedInput || userFound.pass === p) {
+        // SIMPAN SESI KE PENYIMPANAN LOKAL SAAT LOGIN BERHASIL
+        localStorage.setItem('si_elang_session', JSON.stringify({ u, role: userFound.role }));
+        
         setUsername(u); setRole(userFound.role);
         setView(userFound.role === 'superadmin' ? 'superadmin' : (userFound.role === 'management' ? 'management' : 'home'));
         showToast('success', `Login Berhasil! Selamat datang, ${userFound.name}.`);
@@ -832,8 +956,31 @@ const App = () => {
     if (!filteredHistory.length) { showToast('error', 'Tidak ada data diunduh.'); return; }
     showToast('success', 'Menyusun dokumen Excel...');
     try {
+      let periodeTeks = '';
+      if (filterMode === 'month') {
+        const [y, m] = historyFilter.split('-');
+        const dateObj = new Date(y, m - 1);
+        periodeTeks = 'BULAN ' + dateObj.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }).toUpperCase();
+      } else {
+        const dateObj = new Date(historyFilter);
+        periodeTeks = 'TANGGAL ' + dateObj.toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }).toUpperCase();
+      }
+      
+      let judulUtama = 'REKAPITULASI LAYANAN AMBULANS';
+      if (historyServiceFilter === 'rujukan') judulUtama = 'REKAPITULASI RUJUKAN';
+      else if (historyServiceFilter === 'jenazah') judulUtama = 'REKAPITULASI PENGANTARAN JENAZAH';
+
+      const logoBase64 = await getSafeBase64Logo();
+      const logoHtml = logoBase64 ? `<img src="${logoBase64}" height="60" style="margin-bottom: 10px;" />` : `<h2 style="color: #1e3a8a; font-size: 26px; font-weight: 900; letter-spacing: 2px; margin-bottom: 10px;">SI-ELANG</h2>`;
+
       const table = document.createElement('table'); table.setAttribute('border', '1');
-      let html = `<thead><tr>
+      let html = `<thead>
+        <tr><th colspan="18" style="text-align:center; border:none;">${logoHtml}</th></tr>
+        <tr><th colspan="18" style="text-align:center; font-size:18px; font-weight:bold; border:none;">${judulUtama}</th></tr>
+        <tr><th colspan="18" style="text-align:center; font-size:14px; font-weight:bold; border:none;">${periodeTeks}</th></tr>
+        <tr><th colspan="18" style="text-align:center; font-size:14px; font-weight:bold; border:none;">RSUD LEBONG</th></tr>
+        <tr><th colspan="18" style="border:none;"></th></tr>
+        <tr>
         <th style="font-weight:bold; background-color:#f1f5f9; text-align:center;">No</th><th style="font-weight:bold; background-color:#f1f5f9;">Tanggal</th>
         <th style="font-weight:bold; background-color:#f1f5f9;">Berangkat</th><th style="font-weight:bold; background-color:#f1f5f9;">Tiba</th>
         <th style="font-weight:bold; background-color:#f1f5f9;">Layanan</th><th style="font-weight:bold; background-color:#f1f5f9;">Biaya</th>
@@ -883,17 +1030,16 @@ const App = () => {
       }
 
       const { jsPDF } = window.jspdf; const doc = new jsPDF('landscape');
-      const fetchImageBase64 = async (url) => {
-        return new Promise((resolve) => {
-          const img = new Image(); img.crossOrigin = 'Anonymous'; 
-          img.onload = () => { const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height; const ctx = canvas.getContext('2d'); ctx.drawImage(img, 0, 0); resolve(canvas.toDataURL('image/png')); };
-          img.onerror = async () => { try { const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`; const res = await fetch(proxyUrl); const blob = await res.blob(); if (!blob.type.startsWith('image/')) throw new Error('Format salah'); const reader = new FileReader(); reader.onloadend = () => resolve(reader.result); reader.readAsDataURL(blob); } catch (e) { resolve(null); } };
-          img.src = `https://images.weserv.nl/?url=${encodeURIComponent(url.replace(/^https?:\/\//, ''))}&output=png&w=1000&q=100`;
-        });
-      };
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const logoBase64 = await getSafeBase64Logo();
 
-      const logoBase64 = await fetchImageBase64(LOGO_URL); const pageWidth = doc.internal.pageSize.getWidth();
-      if (logoBase64) { try { doc.addImage(logoBase64, 'PNG', 14, 5, 65, 26); } catch(e) {} }
+      if (logoBase64) {
+        try { doc.addImage(logoBase64, 'PNG', 14, 10, 45, 15); } catch(e) {
+            doc.setFontSize(22); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 58, 138); doc.text('SI-ELANG', 14, 20);
+        }
+      } else {
+        doc.setFontSize(22); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 58, 138); doc.text('SI-ELANG', 14, 20);
+      }
 
       let judulUtama = 'REKAPITULASI LAYANAN AMBULANS';
       if (historyServiceFilter === 'rujukan') judulUtama = 'REKAPITULASI RUJUKAN';
@@ -910,13 +1056,13 @@ const App = () => {
       }
 
       doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 58, 138); 
-      doc.text(judulUtama, pageWidth / 2, 14, { align: 'center' });
+      doc.text(judulUtama, pageWidth / 2, 16, { align: 'center' });
       
       doc.setFontSize(12); doc.setFont('helvetica', 'bold'); doc.setTextColor(50, 50, 50);
-      doc.text(periodeTeks, pageWidth / 2, 20, { align: 'center' });
+      doc.text(periodeTeks, pageWidth / 2, 22, { align: 'center' });
       
       doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 58, 138); 
-      doc.text('RSUD LEBONG', pageWidth / 2, 26, { align: 'center' });
+      doc.text('RSUD LEBONG', pageWidth / 2, 28, { align: 'center' });
 
       const head = [['NO', 'NAMA DRIVER', 'PERAWAT/BIDAN', 'PASIEN / JENAZAH', 'TANGGAL', 'RUANGAN ASAL', 'TUJUAN PENGANTARAN', 'TOTAL KM', 'MANUAL\n(AWAL-AKHIR)', 'FOTO KM\nODOMETER', 'BERKAS\nRUJUKAN', 'DURASI']];
       const body = filteredHistory.map((t, i) => {
@@ -930,18 +1076,16 @@ const App = () => {
       });
 
       doc.autoTable({
-        startY: 38, head: head, body: body, theme: 'grid',
+        startY: 40, head: head, body: body, theme: 'grid',
         styles: { fontSize: 8, cellPadding: 3, valign: 'middle', font: 'helvetica', lineWidth: 0.2, lineColor: [150, 150, 150] },
         headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', halign: 'center' },
         columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 32, minCellHeight: 18 }, 10: { cellWidth: 32, minCellHeight: 18 }, 11: { halign: 'center' } },
         
-        // Fitur baru: Memperlebar tinggi baris tabel otomatis sesuai jumlah berkas
         didParseCell: function(data) {
           if (data.section === 'body' && data.column.index === 10) {
             const trip = filteredHistory[data.row.index];
             const numDocs = trip.referralDocs ? trip.referralDocs.length : (trip.referralDoc ? 1 : 0);
             if (numDocs > 2) {
-              // Jika lebih dari 2 berkas, hitung baris tambahan yang dibutuhkan (2 file per baris)
               const rowsNeeded = Math.ceil(numDocs / 2);
               data.cell.styles.minCellHeight = (rowsNeeded * 16) + 4; 
             }
@@ -952,13 +1096,11 @@ const App = () => {
           if (data.section === 'body') { 
             const trip = filteredHistory[data.row.index]; let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
             
-            // Render Foto Odometer (Kolom 9)
             if (data.column.index === 9) {
               if (trip.kmStartPhoto) { try { doc.addImage(trip.kmStartPhoto, 'JPEG', xPos, yPos, imgSize, imgSize); } catch(e) {} }
               if (trip.kmEndPhoto) { try { doc.addImage(trip.kmEndPhoto, 'JPEG', xPos + imgSize + 2, yPos, imgSize, imgSize); } catch(e) {} }
             }
             
-            // Render Foto/Info Berkas Rujukan (Kolom 10)
             if (data.column.index === 10) {
               let startX = xPos;
               let currentX = startX;
@@ -967,7 +1109,6 @@ const App = () => {
               if (trip.referralDocs && trip.referralDocs.length > 0) {
                 let count = 0;
                 for (let docItem of trip.referralDocs) {
-                  // Turun ke baris baru setiap 2 file (agar tidak tumpang tindih)
                   if (count > 0 && count % 2 === 0) {
                     currentX = startX;
                     currentY += imgSize + 2;
@@ -1182,7 +1323,6 @@ const App = () => {
     const files = Array.from(e.target.files);
     if (!user || !selectedTrip || files.length === 0) return;
 
-    // Ambil kategori dokumen dari pilihan dropdown
     const categorySelect = document.getElementById('docCategory');
     const category = categorySelect ? categorySelect.value : 'Berkas Lainnya';
 
@@ -1194,10 +1334,8 @@ const App = () => {
         let base64Data = "";
         
         if (file.type.startsWith('image/')) {
-          // Bypass batas 1MB. Biarkan fungsi compressImage yang bekerja memperkecil file
           base64Data = await compressImage(file);
         } else if (file.type === 'application/pdf') {
-          // Batas 1MB HANYA berlaku untuk PDF karena PDF tidak dikompres
           if (file.size > 1048576) {
             showToast('error', `Ukuran PDF ${file.name} melebihi batas 1MB.`);
             continue;
@@ -1225,7 +1363,6 @@ const App = () => {
       if (newDocs.length > 0) {
         const currentDocs = selectedTrip.referralDocs || [];
         
-        // Membawa data lama jika ada (migrasi otomatis untuk data yang sudah terlanjur dibuat)
         if (selectedTrip.referralDoc && currentDocs.length === 0) {
             currentDocs.push({
                 id: 'old-doc',
@@ -1240,7 +1377,7 @@ const App = () => {
 
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
           referralDocs: updatedDocs,
-          referralDoc: null, // Hapus field lama agar bersih
+          referralDoc: null, 
           referralDocName: null,
           referralDocType: null
         });
@@ -1335,7 +1472,7 @@ const App = () => {
           id: Math.random().toString(36).substring(2, 9),
           name: file.name,
           type: file.type,
-          category: 'Surat Balik RS Tujuan', // Otomatis dilabeli kategori ini
+          category: 'Surat Balik RS Tujuan', 
           url: base64Data
         });
       }
@@ -1374,7 +1511,6 @@ const App = () => {
   const renderDocumentUploadPanel = () => {
     const docs = selectedTrip?.referralDocs || [];
     
-    // Fallback UI untuk file yang diunggah di versi sistem sebelumnya
     if (docs.length === 0 && selectedTrip?.referralDoc) {
        docs.push({
          id: 'old-doc',
@@ -1392,7 +1528,6 @@ const App = () => {
           <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs">{docs.length} File</span>
         </h4>
 
-        {/* List Berkas */}
         {docs.length > 0 ? (
           <div className="space-y-3 mb-4 max-h-[300px] overflow-y-auto pr-1 hide-scrollbar">
             {docs.map((docItem) => (
@@ -1429,7 +1564,6 @@ const App = () => {
           )
         )}
 
-        {/* Area Upload Khusus Perawat */}
         {role === 'nurse' && (
           <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 text-center hover:bg-slate-50 transition-colors relative mt-2">
             <div className="bg-slate-100 w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
@@ -1437,7 +1571,6 @@ const App = () => {
             </div>
             <p className="text-xs font-bold text-slate-600 mb-2">Tambah Berkas</p>
 
-            {/* Dropdown Kategori Berkas */}
             <select id="docCategory" className="w-full max-w-[220px] mx-auto mb-3 text-[10px] p-2 rounded-xl border border-slate-200 outline-none focus:border-blue-500 text-slate-700 font-bold block bg-white cursor-pointer shadow-sm text-center">
               <option value="Surat Pengantar Rujukan">📄 Surat Pengantar Rujukan</option>
               <option value="Surat SISRUTE">🌐 Surat SISRUTE</option>
@@ -1510,6 +1643,7 @@ const App = () => {
           <style>{`
             html { filter: invert(1) hue-rotate(180deg); background: #111; }
             img, video, iframe, .leaflet-container, .re-invert { filter: invert(1) hue-rotate(180deg); }
+            img.dark-logo-fix { filter: none !important; }
           `}</style>
         )}
         
@@ -1521,7 +1655,7 @@ const App = () => {
 
         <div className="w-full max-w-md bg-white/80 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white relative z-10 flex flex-col">
           <div className="flex flex-col items-center mb-6 mt-2 w-full">
-            <img src={LOGO_URL} onError={handleLogoError} alt="Logo" className="w-[90%] max-w-[350px] h-auto object-contain mb-4 transition-all mix-blend-multiply re-invert" />
+            <img src={LOGO_URL} onError={handleLogoError} alt="Logo" className={`w-[90%] max-w-[350px] h-auto object-contain mb-4 transition-all mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
           </div>
 
           {!isRegistering ? (
@@ -1624,6 +1758,7 @@ const App = () => {
         <style>{`
           html { filter: invert(1) hue-rotate(180deg); background: #111; }
           img, video, iframe, .leaflet-container, .re-invert { filter: invert(1) hue-rotate(180deg); }
+          img.dark-logo-fix { filter: none !important; }
         `}</style>
       )}
 
@@ -1719,7 +1854,7 @@ const App = () => {
 
       <aside className="hidden lg:flex flex-col w-[280px] bg-white text-slate-600 transition-all shadow-[4px_0_24px_rgba(0,0,0,0.03)] z-40 flex-shrink-0 relative border-r border-slate-200">
         <div className="p-6 border-b border-slate-100 flex flex-col items-center justify-center bg-white sticky top-0 z-10 text-center">
-          <img src={LOGO_URL} onError={handleLogoError} className="w-full px-2 max-w-[260px] h-auto object-contain mb-2 mix-blend-multiply re-invert" alt="Logo" />
+          <img src={LOGO_URL} onError={handleLogoError} className={`w-full px-2 max-w-[260px] h-auto object-contain mb-2 mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} alt="Logo" />
           <div>
             <p className="text-[10px] text-blue-600 font-bold uppercase tracking-widest bg-blue-50 px-3 py-1 rounded inline-block mt-1">
               {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
@@ -1793,7 +1928,7 @@ const App = () => {
       <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-slate-50/50">
         <header className="lg:hidden bg-white/90 backdrop-blur-md sticky top-0 z-50 p-3 sm:p-4 border-b border-slate-200 flex justify-between items-center shadow-sm gap-2">
           <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
-            <img src={LOGO_URL} onError={handleLogoError} alt="SI-ELANG" className="w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply re-invert" />
+            <img src={LOGO_URL} onError={handleLogoError} alt="SI-ELANG" className={`w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
             <div className="flex flex-col justify-center overflow-hidden">
               <p className="font-bold text-[9px] sm:text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100 truncate">
                 {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
@@ -2470,7 +2605,6 @@ const App = () => {
                                   <span className="text-[9px] text-slate-400 font-bold block bg-white px-1 py-0.5 rounded border border-slate-100">{trip.kmStartValue || '-'} → {trip.kmEndValue || '-'}</span>
                                 </td>
                                 
-                                {/* KOLOM FOTO ODOMETER (Sebelumnya tidak sengaja terhapus) */}
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex items-center justify-center gap-2">
                                     {trip.kmStartPhoto ? (
@@ -2486,7 +2620,6 @@ const App = () => {
                                   </div>
                                 </td>
 
-                                {/* KOLOM BERKAS RUJUKAN & SURAT BALIK */}
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex flex-col items-center gap-2">
                                     {trip.referralDocs?.length > 0 ? (
@@ -2519,7 +2652,6 @@ const App = () => {
                                       <span className="text-[10px] text-slate-400 font-medium">N/A</span>
                                     )}
 
-                                    {/* Tombol Khusus Upload Surat Balik di Riwayat */}
                                     {role === 'nurse' && (
                                       <label className="mt-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase cursor-pointer transition-colors shadow-sm inline-flex items-center gap-1.5 w-max">
                                         <UploadCloud size={12} /> + Surat Balik
