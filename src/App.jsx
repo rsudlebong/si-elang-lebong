@@ -1849,6 +1849,10 @@ const App = () => {
   const isHomeActive = (view === 'home' || view === 'management' || view === 'superadmin') && !selectedTrip && view !== 'history';
   const isHistoryActive = view === 'history';
 
+  // Variabel baru untuk mengambil Nama Tampilan sesuai username yang aktif
+  const currentUserData = appUsers[username] || DEFAULT_USERS[username];
+  const userDisplayName = currentUserData ? currentUserData.name : username;
+
   return (
     <div className="flex h-[100dvh] w-full bg-slate-50 overflow-hidden font-sans text-slate-800">
       
@@ -2064,10 +2068,10 @@ const App = () => {
           <div className="flex items-center justify-between p-3 rounded-2xl bg-white border border-slate-200 shadow-sm hover:shadow-md transition-all gap-2">
             <div className="flex items-center gap-3 overflow-hidden">
               <div className="w-10 h-10 flex-shrink-0 bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl flex items-center justify-center font-black text-sm text-white shadow-inner">
-                {username?.charAt(0).toUpperCase()}
+                {userDisplayName?.charAt(0).toUpperCase()}
               </div>
               <div className="text-left overflow-hidden hidden xl:block">
-                <p className="text-xs font-bold text-slate-800 truncate">{username}</p>
+                <p className="text-xs font-bold text-slate-800 truncate">{userDisplayName}</p>
                 <p className="text-[9px] text-emerald-600 uppercase font-bold tracking-widest flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span> Online
                 </p>
@@ -2091,7 +2095,7 @@ const App = () => {
             <img src={LOGO_URL} onError={handleLogoError} alt="SI-ELANG" className={`w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
             <div className="flex flex-col justify-center overflow-hidden">
               {/* Tambahkan baris ini agar username terlihat di versi mobile */}
-              <p className="font-bold text-xs text-slate-800 truncate leading-none mb-0.5">{username}</p>
+              <p className="font-bold text-xs text-slate-800 truncate leading-none mb-0.5">{userDisplayName}</p>
               <p className="font-bold text-[9px] sm:text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100 truncate">
                 {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
               </p>
