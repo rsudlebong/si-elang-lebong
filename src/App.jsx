@@ -357,6 +357,8 @@ const App = () => {
   const [isMobileFormOpen, setIsMobileFormOpen] = useState(false);
   // State untuk modal hapus riwayat
   const [tripToDelete, setTripToDelete] = useState(null);
+  // State untuk modal hapus user
+  const [userToDelete, setUserToDelete] = useState(null);
 
   const alarmAudio = useRef(null);
   const audioUnlocked = useRef(false);
@@ -763,20 +765,29 @@ const App = () => {
     setIsMobileFormOpen(false); // Tutup form di mobile setelah simpan
   };
 
-  const deleteUserAccount = async (uname) => {
-    if (!user) return;
-    if (uname === 'superadmin') { showToast('error', 'Akun Super Admin Utama tidak bisa dihapus!'); return; }
-    const newUsers = { ...appUsers }; delete newUsers[uname];
+  const confirmDeleteUser = async () => {
+    if (!user || !userToDelete) return;
+    if (userToDelete === 'superadmin') { showToast('error', 'Akun Super Admin Utama tidak bisa dihapus!'); setUserToDelete(null); return; }
+    
+    const newUsers = { ...appUsers }; 
+    delete newUsers[userToDelete];
+    
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
-    showToast('success', `Akun ${uname} berhasil dihapus!`);
+    showToast('success', `Akun ${userToDelete} berhasil dihapus!`);
     
     // Jika menghapus akun yang sedang diedit, bersihkan form dan tutup
-    if(editUserMode && editingUsername === uname) {
+    if(editUserMode && editingUsername === userToDelete) {
         setEditUserMode(false);
         setEditingUsername('');
         setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
         setIsMobileFormOpen(false);
     }
+    setUserToDelete(null);
+  };
+
+  const deleteUserAccount = (uname) => {
+    // Memunculkan modal konfirmasi
+    setUserToDelete(uname);
   };
 
   const editUserAccount = (uname, data) => { 
@@ -849,6 +860,7 @@ const App = () => {
         triage: serviceType === 'jenazah' ? 'Hitam' : (formData.get('triage') || "Hijau"), eConsent: formData.get('eConsent') === 'on', 
         origin: formData.get('origin') || "", destination: finalDestination || "",
         dpjp: formData.get('dpjp') || '-', nurse: nurseCheck?.nurseName || 'Perawat Jaga',
+        creatorId: username, // Menyimpan ID perawat/petugas pembuat rujukan
         serviceType: serviceType || "rujukan", paymentStatus: paymentStatus || "UMUM", 
         driver: 'Mencari Driver...', driverId: null, status: 'PENDING',
         startTime: new Date().toISOString(), vitals: { hr: 80, bp: "120/80", spo2: 98, temp: 36.5 },
@@ -989,15 +1001,29 @@ const App = () => {
     return { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' };
   };
 
-  const filteredHistory = useMemo(() => activeTrips.filter(t => 
-    t.status === 'COMPLETED' && (!t.startTime || t.startTime.startsWith(historyFilter)) && 
-    (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter) &&
-    (role !== 'driver' || t.driverId === username)
-  ), [activeTrips, historyFilter, historyServiceFilter, role, username]);
+  const filteredHistory = useMemo(() => activeTrips.filter(t => {
+    const matchStatus = t.status === 'COMPLETED';
+    const matchDate = (!t.startTime || t.startTime.startsWith(historyFilter));
+    const matchService = (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter);
+    
+    // Batasi akses riwayat sesuai peran
+    let matchRole = true;
+    if (role === 'driver') matchRole = t.driverId === username;
+    if (role === 'nurse' || role === 'doctor') matchRole = t.creatorId === username;
 
-  const visibleTrips = useMemo(() => activeTrips.filter(t => 
-    t.status === 'PENDING' || (t.status === 'OTW' && (role !== 'driver' || t.driverId === username))
-  ), [activeTrips, role, username]);
+    return matchStatus && matchDate && matchService && matchRole;
+  }), [activeTrips, historyFilter, historyServiceFilter, role, username]);
+
+  const visibleTrips = useMemo(() => activeTrips.filter(t => {
+    if (t.status === 'PENDING') return true; // Semua pihak bisa melihat status pending
+    if (t.status === 'OTW') {
+       // Batasi akses saat rujukan sedang OTW (aktif)
+       if (role === 'driver') return t.driverId === username;
+       if (role === 'nurse' || role === 'doctor') return t.creatorId === username;
+       return true; // Manajemen dan Superadmin tetap melihat semuanya
+    }
+    return false;
+  }), [activeTrips, role, username]);
 
   const exportToExcel = async () => {
     if (!filteredHistory.length) { showToast('error', 'Tidak ada data diunduh.'); return; }
@@ -1775,6 +1801,8 @@ const App = () => {
                   <option value="nurse">Perawat / Nakes</option>
                   <option value="driver">Driver Ambulans</option>
                   <option value="doctor">Dokter / DPJP</option>
+                  <option value="management">Manajemen / Admin</option>
+                  <option value="superadmin">Super Admin</option>
                 </select>
               </div>
               <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-blue-700 via-blue-600 to-red-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mt-4 flex justify-center items-center gap-2 text-xs tracking-widest uppercase transition-all">
@@ -1847,6 +1875,27 @@ const App = () => {
                 <div className="flex gap-3">
                     <button onClick={() => setTripToDelete(null)} disabled={loading} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl transition-all">Batal</button>
                     <button onClick={confirmDeleteHistory} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 transition-all flex justify-center items-center">
+                        {loading ? 'Menghapus...' : 'Ya, Hapus'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Modal Hapus Akun User Khusus Superadmin */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
+                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle size={36} className="text-red-500" />
+                </div>
+                <h3 className="text-xl font-black text-slate-800 mb-2">Hapus Akun?</h3>
+                <p className="text-sm text-slate-500 font-medium mb-8">
+                  Anda yakin ingin menghapus akun <strong>@{userToDelete}</strong>? Tindakan ini tidak dapat dibatalkan.
+                </p>
+                <div className="flex gap-3">
+                    <button onClick={() => setUserToDelete(null)} disabled={loading} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl transition-all">Batal</button>
+                    <button onClick={confirmDeleteUser} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 transition-all flex justify-center items-center">
                         {loading ? 'Menghapus...' : 'Ya, Hapus'}
                     </button>
                 </div>
@@ -1997,6 +2046,8 @@ const App = () => {
           <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
             <img src={LOGO_URL} onError={handleLogoError} alt="SI-ELANG" className={`w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
             <div className="flex flex-col justify-center overflow-hidden">
+              {/* Tambahkan baris ini agar username terlihat di versi mobile */}
+              <p className="font-bold text-xs text-slate-800 truncate leading-none mb-0.5">{username}</p>
               <p className="font-bold text-[9px] sm:text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100 truncate">
                 {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
               </p>
@@ -2581,7 +2632,10 @@ const App = () => {
                   <div className="lg:col-span-8 bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
                     <div className="p-6 border-b border-slate-100 bg-slate-50"><h4 className="text-base font-black text-blue-900">Daftar Akun Sistem Terdaftar</h4></div>
                     <div className="divide-y divide-slate-100">
-                      {Object.entries(appUsers).map(([uname, data]) => (
+                      {/* Pembaruan: Kita menggabungkan DEFAULT_USERS dengan appUsers saat rendering 
+                          agar akun admin & superadmin selalu ter-list tanpa perlu menyimpan ulang ke database.
+                      */}
+                      {Object.entries({ ...DEFAULT_USERS, ...appUsers }).map(([uname, data]) => (
                         <div key={uname} className="p-4 lg:p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center hover:bg-slate-50 transition-colors gap-4">
                           <div className="flex items-center gap-4">
                             <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black text-xl border border-blue-200 shrink-0">{data.name.charAt(0).toUpperCase()}</div>
