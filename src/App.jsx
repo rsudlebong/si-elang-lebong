@@ -359,6 +359,8 @@ const App = () => {
   const [tripToDelete, setTripToDelete] = useState(null);
   // State untuk modal hapus user
   const [userToDelete, setUserToDelete] = useState(null);
+  // State untuk modal batal/hapus rujukan aktif
+  const [activeTripToCancel, setActiveTripToCancel] = useState(null);
 
   const alarmAudio = useRef(null);
   const audioUnlocked = useRef(false);
@@ -984,6 +986,27 @@ const App = () => {
        setTripToDelete(null);
     } catch(err) {
        showToast('error', 'Gagal menghapus riwayat rujukan.');
+    } finally {
+       setLoading(false);
+    }
+  };
+
+  // FUNGSI BATAL/HAPUS RUJUKAN AKTIF
+  const confirmCancelActiveTrip = async () => {
+    if (!activeTripToCancel || !user) return;
+    setLoading(true);
+    try {
+       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', activeTripToCancel.id));
+       showToast('success', 'Rujukan aktif berhasil dibatalkan dan dihapus.');
+       setActiveTripToCancel(null);
+       
+       // Jika pengguna sedang membuka detail rujukan yang dihapus, kembalikan ke Home
+       if (selectedTrip?.id === activeTripToCancel.id) {
+           setSelectedTrip(null);
+           setView('home');
+       }
+    } catch(err) {
+       showToast('error', 'Gagal membatalkan rujukan.');
     } finally {
        setLoading(false);
     }
@@ -1897,6 +1920,27 @@ const App = () => {
                     <button onClick={() => setUserToDelete(null)} disabled={loading} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl transition-all">Batal</button>
                     <button onClick={confirmDeleteUser} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 transition-all flex justify-center items-center">
                         {loading ? 'Menghapus...' : 'Ya, Hapus'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {/* Modal Batal/Hapus Rujukan Aktif */}
+      {activeTripToCancel && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
+                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle size={36} className="text-red-500" />
+                </div>
+                <h3 className="text-xl font-black text-slate-800 mb-2">Batalkan Rujukan?</h3>
+                <p className="text-sm text-slate-500 font-medium mb-8">
+                  Anda yakin ingin membatalkan dan menghapus rujukan <strong>{activeTripToCancel.patientName}</strong>? Tindakan ini tidak dapat dikembalikan.
+                </p>
+                <div className="flex gap-3">
+                    <button onClick={() => setActiveTripToCancel(null)} disabled={loading} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl transition-all">Kembali</button>
+                    <button onClick={confirmCancelActiveTrip} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 transition-all flex justify-center items-center">
+                        {loading ? 'Memproses...' : 'Ya, Batalkan'}
                     </button>
                 </div>
             </div>
@@ -2829,9 +2873,16 @@ const App = () => {
             {view === 'tripDetail' && selectedTrip && (
               <div className="animate-in slide-in-from-right space-y-6 pb-10">
                 <div className={`rounded-[2.5rem] p-6 lg:p-8 text-white shadow-xl relative overflow-hidden transition-colors ${selectedTrip.serviceType === 'jenazah' ? 'bg-slate-800' : (selectedTrip.triage === 'Merah' ? 'bg-red-900' : selectedTrip.triage === 'Kuning' ? 'bg-yellow-700' : 'bg-blue-900')}`}>
-                  <button onClick={() => setView('home')} className="text-[10px] lg:text-xs font-black opacity-60 hover:opacity-100 hover:bg-white/10 px-3 py-1.5 rounded-lg mb-4 uppercase tracking-widest flex items-center gap-2 z-20 relative border border-transparent w-max transition-colors">
-                    ← Kembali ke Dasbor
-                  </button>
+                  <div className="flex justify-between items-center w-full mb-4 z-20 relative">
+                    <button onClick={() => setView('home')} className="text-[10px] lg:text-xs font-black opacity-60 hover:opacity-100 hover:bg-white/10 px-3 py-1.5 rounded-lg uppercase tracking-widest flex items-center gap-2 border border-transparent transition-colors">
+                      ← Kembali ke Dasbor
+                    </button>
+                    {(selectedTrip.creatorId === username || role === 'superadmin' || role === 'management') && selectedTrip.status !== 'COMPLETED' && (
+                      <button onClick={() => setActiveTripToCancel(selectedTrip)} className="text-[10px] lg:text-xs font-black bg-red-500/20 hover:bg-red-500 text-white px-3 py-1.5 rounded-lg uppercase tracking-widest flex items-center gap-2 border border-red-400/50 hover:border-red-500 transition-colors shadow-sm backdrop-blur-sm">
+                        <Trash2 size={14} /> Batalkan Rujukan
+                      </button>
+                    )}
+                  </div>
                   <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6 relative z-10">
                     <div>
                       <p className="text-[10px] lg:text-xs font-black uppercase tracking-[0.2em] mb-2 flex items-center gap-1.5 opacity-80">
