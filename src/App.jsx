@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, collection, doc, setDoc, onSnapshot,
-  addDoc, updateDoc, arrayUnion, getDoc
+  addDoc, updateDoc, arrayUnion, getDoc, deleteDoc
 } from 'firebase/firestore';
 import {
   getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged
@@ -19,7 +19,7 @@ import {
   Siren, Wind, Sparkles, AlertCircle, Eye, EyeOff, History, 
   CalendarDays, Fingerprint, Stethoscope, BriefcaseMedical, Key, 
   Edit, Trash2, Smartphone, Camera, Rocket, Lock, Video, ImagePlus,
-  WifiOff, Moon, Sun, Maximize, Minimize, UploadCloud
+  WifiOff, Moon, Sun, Maximize, Minimize, UploadCloud, X
 } from 'lucide-react';
 
 // ==========================================
@@ -261,26 +261,35 @@ const getSafeBase64Logo = async () => {
   }
 };
 
-const NativeMapRender = ({ lat, lng, mapId }) => {
+const NativeMapRender = ({ initialLat, initialLng, mapId, trackingId }) => {
   const mapRef = useRef(null);
   const markerRef = useRef(null);
 
   useEffect(() => {
-    if (!window.L || !document.getElementById(mapId) || !lat || !lng) return;
+    if (!window.L || !document.getElementById(mapId) || !initialLat || !initialLng) return;
 
     if (!mapRef.current) {
-      mapRef.current = window.L.map(mapId).setView([lat, lng], 14);
+      mapRef.current = window.L.map(mapId).setView([initialLat, initialLng], 14);
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(mapRef.current);
       
-      // MENGGANTI IKON KERANJANG MENJADI AMBULANS
       const ambIcon = window.L.icon({ iconUrl: 'https://img.icons8.com/color/96/ambulance.png', iconSize: [45, 45], iconAnchor: [22, 22] });
       
-      markerRef.current = window.L.marker([lat, lng], { icon: ambIcon }).addTo(mapRef.current).bindPopup("Ambulans Live").openPopup();
-    } else {
-      mapRef.current.setView([lat, lng]);
-      if (markerRef.current) markerRef.current.setLatLng([lat, lng]);
+      markerRef.current = window.L.marker([initialLat, initialLng], { icon: ambIcon }).addTo(mapRef.current).bindPopup("Ambulans Live").openPopup();
     }
-  }, [lat, lng, mapId]);
+  }, [initialLat, initialLng, mapId]);
+
+  // MENCEGAH KEBOCORAN KUOTA: Peta hanya menarik 1 kordinat GPS tanpa menarik tabel rujukan utama
+  useEffect(() => {
+    if (!trackingId || !window.L || !mapRef.current) return;
+    const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'live_gps', trackingId), (snap) => {
+      if (snap.exists() && markerRef.current) {
+        const pos = snap.data();
+        mapRef.current.setView([pos.lat, pos.lng]);
+        markerRef.current.setLatLng([pos.lat, pos.lng]);
+      }
+    });
+    return () => unsub();
+  }, [trackingId]);
 
   useEffect(() => {
     return () => {
@@ -343,6 +352,11 @@ const App = () => {
   const [editUserMode, setEditUserMode] = useState(false);
   const [editingUsername, setEditingUsername] = useState('');
   const [userForm, setUserForm] = useState({ username: '', name: '', pass: '', role: 'nurse' });
+  
+  // State untuk form di Mobile
+  const [isMobileFormOpen, setIsMobileFormOpen] = useState(false);
+  // State untuk modal hapus riwayat
+  const [tripToDelete, setTripToDelete] = useState(null);
 
   const alarmAudio = useRef(null);
   const audioUnlocked = useRef(false);
@@ -656,8 +670,11 @@ const App = () => {
 
             try { 
               lastGpsUpdate.current = now;
-              await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', activeTripId), { 
-                driverLocation: { lat: pos.coords.latitude, lng: pos.coords.longitude } 
+              // MENCEGAH KEBOCORAN KUOTA: Tulis koordinat GPS ke tabel terpisah (live_gps)
+              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'live_gps', activeTripId), { 
+                lat: pos.coords.latitude, 
+                lng: pos.coords.longitude,
+                updatedAt: new Date().toISOString()
               }); 
             } catch (err) {}
           },
@@ -743,6 +760,7 @@ const App = () => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
     showToast('success', 'Data Pengguna Berhasil Diperbarui!');
     setEditUserMode(false); setEditingUsername(''); setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
+    setIsMobileFormOpen(false); // Tutup form di mobile setelah simpan
   };
 
   const deleteUserAccount = async (uname) => {
@@ -751,9 +769,23 @@ const App = () => {
     const newUsers = { ...appUsers }; delete newUsers[uname];
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
     showToast('success', `Akun ${uname} berhasil dihapus!`);
+    
+    // Jika menghapus akun yang sedang diedit, bersihkan form dan tutup
+    if(editUserMode && editingUsername === uname) {
+        setEditUserMode(false);
+        setEditingUsername('');
+        setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
+        setIsMobileFormOpen(false);
+    }
   };
 
-  const editUserAccount = (uname, data) => { setEditUserMode(true); setEditingUsername(uname); setUserForm({ ...data, username: uname, pass: '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const editUserAccount = (uname, data) => { 
+      setEditUserMode(true); 
+      setEditingUsername(uname); 
+      setUserForm({ ...data, username: uname, pass: '' }); 
+      setIsMobileFormOpen(true); // Buka form di mobile
+      window.scrollTo({ top: 0, behavior: 'smooth' }); 
+  };
 
   const startDictation = (targetSelector) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -928,6 +960,21 @@ const App = () => {
     if (!user) return;
     await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', id), { status: 'COMPLETED', endTime: new Date().toISOString() });
     setSelectedTrip(null); setView('home'); showToast('success', 'Tugas Selesai. Tersimpan di Riwayat.', 4000);
+  };
+
+  // FUNGSI KHUSUS SUPERADMIN: Hapus Riwayat Permanen
+  const confirmDeleteHistory = async () => {
+    if (!tripToDelete || !user) return;
+    setLoading(true);
+    try {
+       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', tripToDelete.id));
+       showToast('success', 'Riwayat rujukan berhasil dihapus permanen.');
+       setTripToDelete(null);
+    } catch(err) {
+       showToast('error', 'Gagal menghapus riwayat rujukan.');
+    } finally {
+       setLoading(false);
+    }
   };
 
   const getDuration = (startIso, endIso) => {
@@ -1786,6 +1833,27 @@ const App = () => {
         </div>
       )}
 
+      {/* Modal Hapus Riwayat Khusus Superadmin */}
+      {tripToDelete && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
+                <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle size={36} className="text-red-500" />
+                </div>
+                <h3 className="text-xl font-black text-slate-800 mb-2">Hapus Riwayat?</h3>
+                <p className="text-sm text-slate-500 font-medium mb-8">
+                  Tindakan ini hanya dapat dilakukan oleh Superadmin dan tidak dapat dibatalkan. Riwayat <strong>{tripToDelete.patientName}</strong> akan dihapus permanen dari sistem.
+                </p>
+                <div className="flex gap-3">
+                    <button onClick={() => setTripToDelete(null)} disabled={loading} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-xl transition-all">Batal</button>
+                    <button onClick={confirmDeleteHistory} disabled={loading} className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-red-200 transition-all flex justify-center items-center">
+                        {loading ? 'Menghapus...' : 'Ya, Hapus'}
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
       {fullScreenMapId && activeTrips.find(t => t.id === fullScreenMapId) && (
         <div className="fixed inset-0 z-[9999] bg-slate-900 flex flex-col animate-in fade-in zoom-in-95 duration-300">
           <div className="bg-slate-900 text-white p-4 flex justify-between items-center shadow-lg z-10">
@@ -1803,9 +1871,10 @@ const App = () => {
           </div>
           <div className="flex-1 w-full relative z-0">
             <NativeMapRender 
-              lat={activeTrips.find(t => t.id === fullScreenMapId)?.driverLocation?.lat} 
-              lng={activeTrips.find(t => t.id === fullScreenMapId)?.driverLocation?.lng} 
+              initialLat={-3.1950} // Kordinat pusat standby (Lebong)
+              initialLng={102.1648} 
               mapId={`map-fs-${fullScreenMapId}`} 
+              trackingId={fullScreenMapId}
             />
           </div>
         </div>
@@ -1872,14 +1941,12 @@ const App = () => {
             <LayoutDashboard size={20} /> <span className="tracking-wide">Dasbor Sistem</span>
           </button>
           
-          {role !== 'superadmin' && (
-            <button 
-              onClick={() => { setView('history'); setSelectedTrip(null); }} 
-              className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all border border-transparent ${isHistoryActive ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-700'}`}
-            >
-              <History size={20} /> <span className="tracking-wide">Riwayat Layanan</span>
-            </button>
-          )}
+          <button 
+            onClick={() => { setView('history'); setSelectedTrip(null); }} 
+            className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-sm transition-all border border-transparent ${isHistoryActive ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' : 'text-slate-500 hover:bg-blue-50 hover:text-blue-700'}`}
+          >
+            <History size={20} /> <span className="tracking-wide">Riwayat Layanan</span>
+          </button>
 
           {selectedTrip && view === 'tripDetail' && (
             <>
@@ -2431,19 +2498,18 @@ const App = () => {
                           </div>
                           {trip.status === 'OTW' && (
                             <div className="mt-6 pt-6 border-t border-slate-100">
-                              <h4 className="text-xs font-black uppercase text-blue-900 mb-3 flex items-center gap-1.5"><MapPin size={16} /> Posisi GPS Ambulans {trip.driverLocation ? <span className="text-emerald-500 animate-pulse">(Live 🟢)</span> : <span className="text-orange-400">(Mencari Sinyal...)</span>}</h4>
-                              {trip.driverLocation ? (
-                                <div className="w-full h-[250px] lg:h-[350px] rounded-2xl overflow-hidden relative border border-slate-200 shadow-inner z-0 group/map">
-                                  <button onClick={(e) => { e.stopPropagation(); setFullScreenMapId(trip.id); }} className="absolute top-3 right-3 z-[400] bg-white/90 backdrop-blur hover:bg-white p-2.5 rounded-xl shadow-lg text-blue-600 transition-all hover:scale-105 flex items-center gap-2 border border-blue-100">
-                                    <Maximize size={16} /> <span className="text-[10px] font-black uppercase hidden lg:block">Penuh</span>
-                                  </button>
-                                  <NativeMapRender lat={trip.driverLocation.lat} lng={trip.driverLocation.lng} mapId={`map-${trip.id}`} />
-                                </div>
-                              ) : (
-                                <div className="bg-slate-100 h-[250px] lg:h-[350px] rounded-2xl relative overflow-hidden border border-slate-200 shadow-inner flex items-center justify-center text-slate-400 text-xs font-bold uppercase">
-                                  Menunggu Sinyal GPS...
-                                </div>
-                              )}
+                              <h4 className="text-xs font-black uppercase text-blue-900 mb-3 flex items-center gap-1.5"><MapPin size={16} /> Posisi GPS Ambulans <span className="text-emerald-500 animate-pulse">(Live 🟢)</span></h4>
+                              <div className="w-full h-[250px] lg:h-[350px] rounded-2xl overflow-hidden relative border border-slate-200 shadow-inner z-0 group/map">
+                                <button onClick={(e) => { e.stopPropagation(); setFullScreenMapId(trip.id); }} className="absolute top-3 right-3 z-[400] bg-white/90 backdrop-blur hover:bg-white p-2.5 rounded-xl shadow-lg text-blue-600 transition-all hover:scale-105 flex items-center gap-2 border border-blue-100">
+                                  <Maximize size={16} /> <span className="text-[10px] font-black uppercase hidden lg:block">Penuh</span>
+                                </button>
+                                <NativeMapRender 
+                                  initialLat={-3.1950} 
+                                  initialLng={102.1648} 
+                                  mapId={`map-${trip.id}`} 
+                                  trackingId={trip.id} 
+                                />
+                              </div>
                             </div>
                           )}
                         </div>
@@ -2462,9 +2528,27 @@ const App = () => {
                   <p className="text-sm font-medium opacity-80 relative z-10">Manajemen Akses, Kredensial & Pengguna Sistem SI-ELANG.</p>
                   <Key className="absolute -right-4 -bottom-4 opacity-10 pointer-events-none" size={150} />
                 </div>
+                
+                {/* Tombol Toggle Form di HP */}
+                <div className="lg:hidden flex justify-between items-center bg-white p-4 rounded-[1.5rem] shadow-sm border border-slate-200">
+                    <div>
+                        <h4 className="font-black text-blue-900">Form Pengguna</h4>
+                        <p className="text-[10px] text-slate-500 font-bold mt-1">Tambah / edit akun petugas</p>
+                    </div>
+                    <button
+                        onClick={() => setIsMobileFormOpen(!isMobileFormOpen)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md text-white ${isMobileFormOpen ? 'bg-red-500 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'}`}
+                    >
+                        {isMobileFormOpen ? 'Tutup Form' : '+ Tambah Baru'}
+                    </button>
+                </div>
+
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                  <div className="lg:col-span-4 bg-white p-6 lg:p-8 rounded-[2.5rem] shadow-sm border border-slate-200 h-max sticky top-6">
-                    <h4 className="text-base font-black text-blue-900 mb-6 flex items-center gap-2"><User size={20}/> {editUserMode ? 'Edit Pengguna' : 'Tambah Baru'}</h4>
+                  <div className={`lg:col-span-4 bg-white p-6 lg:p-8 rounded-[2.5rem] shadow-sm border border-slate-200 h-max sticky top-6 ${isMobileFormOpen ? 'block animate-in slide-in-from-top-4' : 'hidden lg:block'}`}>
+                    <h4 className="text-base font-black text-blue-900 mb-6 flex items-center justify-between gap-2">
+                       <span className="flex items-center gap-2"><User size={20}/> {editUserMode ? 'Edit Pengguna' : 'Tambah Baru'}</span>
+                       <button className="lg:hidden text-slate-400 hover:text-red-500 bg-slate-50 hover:bg-red-50 p-1.5 rounded-lg" onClick={() => setIsMobileFormOpen(false)}><X size={18}/></button>
+                    </h4>
                     <form onSubmit={saveUserAccount} className="space-y-4">
                       <div>
                         <label className="text-[10px] font-bold text-slate-500 uppercase">Username Login</label>
@@ -2490,7 +2574,7 @@ const App = () => {
                       </div>
                       <div className="flex gap-3 pt-4 border-t border-slate-100">
                         <button type="submit" className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-black py-4 rounded-2xl text-sm transition-colors">SIMPAN</button>
-                        {editUserMode && <button type="button" onClick={() => {setEditUserMode(false); setUserForm({username:'', name:'', pass:'', role:'nurse'})}} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-4 rounded-2xl text-sm transition-colors">BATAL</button>}
+                        {editUserMode && <button type="button" onClick={() => {setEditUserMode(false); setUserForm({username:'', name:'', pass:'', role:'nurse'}); setIsMobileFormOpen(false);}} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-4 rounded-2xl text-sm transition-colors">BATAL</button>}
                       </div>
                     </form>
                   </div>
@@ -2498,17 +2582,20 @@ const App = () => {
                     <div className="p-6 border-b border-slate-100 bg-slate-50"><h4 className="text-base font-black text-blue-900">Daftar Akun Sistem Terdaftar</h4></div>
                     <div className="divide-y divide-slate-100">
                       {Object.entries(appUsers).map(([uname, data]) => (
-                        <div key={uname} className="p-6 flex justify-between items-center hover:bg-slate-50 transition-colors">
+                        <div key={uname} className="p-4 lg:p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center hover:bg-slate-50 transition-colors gap-4">
                           <div className="flex items-center gap-4">
-                            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black text-xl border border-blue-200">{data.name.charAt(0).toUpperCase()}</div>
+                            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-black text-xl border border-blue-200 shrink-0">{data.name.charAt(0).toUpperCase()}</div>
                             <div>
                               <p className="text-base font-black text-slate-800">{data.name}</p>
-                              <p className="text-sm font-bold text-slate-500 mt-0.5">@{uname} <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[10px] uppercase border border-blue-100">{data.role === 'management' ? 'manajemen' : data.role === 'doctor' ? 'dokter' : data.role === 'nurse' ? 'perawat' : data.role}</span></p>
+                              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                                 <p className="text-sm font-bold text-slate-500">@{uname}</p>
+                                 <span className="text-blue-600 bg-blue-50 px-2 py-1 rounded text-[10px] uppercase border border-blue-100">{data.role === 'management' ? 'manajemen' : data.role === 'doctor' ? 'dokter' : data.role === 'nurse' ? 'perawat' : data.role}</span>
+                              </div>
                             </div>
                           </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => editUserAccount(uname, { ...data, pass: '' })} className="p-3 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors"><Edit size={18} /></button>
-                            <button onClick={() => deleteUserAccount(uname)} className="p-3 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-colors"><Trash2 size={18} /></button>
+                          <div className="flex gap-2 self-end sm:self-auto">
+                            <button onClick={() => editUserAccount(uname, { ...data, pass: '' })} className="px-4 py-2 sm:p-3 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors flex items-center gap-2"><Edit size={16} /> <span className="text-xs font-bold sm:hidden">Edit</span></button>
+                            <button onClick={() => deleteUserAccount(uname)} className="px-4 py-2 sm:p-3 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl transition-colors flex items-center gap-2"><Trash2 size={16} /> <span className="text-xs font-bold sm:hidden">Hapus</span></button>
                           </div>
                         </div>
                       ))}
@@ -2575,6 +2662,8 @@ const App = () => {
                             <th className="p-4 text-center border border-slate-300">Bukti Foto (KM)</th>
                             <th className="p-4 text-center border border-slate-300">Berkas Rujukan</th>
                             <th className="p-4 text-center border border-slate-300">Durasi</th>
+                            {/* KHUSUS SUPERADMIN: Kolom Aksi */}
+                            {role === 'superadmin' && <th className="p-4 text-center border border-slate-300">Aksi</th>}
                           </tr>
                         </thead>
                         <tbody className="text-xs lg:text-sm font-medium">
@@ -2663,6 +2752,15 @@ const App = () => {
                                 <td className="p-4 text-center text-blue-600 font-black border border-slate-200">
                                   <span className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-lg">{getDuration(trip.startTime, trip.endTime)}m</span>
                                 </td>
+
+                                {/* KHUSUS SUPERADMIN: Tombol Hapus */}
+                                {role === 'superadmin' && (
+                                  <td className="p-4 text-center border border-slate-200">
+                                    <button onClick={() => setTripToDelete(trip)} className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors shadow-sm" title="Hapus Permanen">
+                                       <Trash2 size={16} />
+                                    </button>
+                                  </td>
+                                )}
                               </tr>
                             )
                           })}
@@ -2770,15 +2868,15 @@ const App = () => {
           </div>
         </main>
 
-        {view !== 'login' && role !== 'superadmin' && (
+        {view !== 'login' && (
           <nav className="lg:hidden absolute bottom-6 left-1/2 -translate-x-1/2 w-[90%] max-w-[360px] bg-white/90 backdrop-blur-xl border border-slate-200 shadow-2xl rounded-[2.5rem] px-6 py-4 flex justify-between items-center z-[70]">
-            <button onClick={() => { setView(role === 'management' ? 'management' : 'home'); setSelectedTrip(null); }} className={`flex flex-col items-center gap-1 w-16 transition-all ${(view === 'home' || view === 'management') ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
+            <button onClick={() => { setView(role === 'management' ? 'management' : (role === 'superadmin' ? 'superadmin' : 'home')); setSelectedTrip(null); }} className={`flex flex-col items-center gap-1 w-16 transition-all ${(view === 'home' || view === 'management' || view === 'superadmin') ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
               <LayoutDashboard size={20} strokeWidth={2.5} /><span className="text-[8px] font-black uppercase">Dasbor</span>
             </button>
             <button onClick={() => { setView('history'); setSelectedTrip(null); }} className={`flex flex-col items-center gap-1 w-16 transition-all ${view === 'history' ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
               <History size={20} strokeWidth={2.5} /><span className="text-[8px] font-black uppercase">Riwayat</span>
             </button>
-            <button onClick={() => setView('home')} className="relative w-16 flex justify-center group">
+            <button onClick={() => setView(role === 'superadmin' ? 'superadmin' : 'home')} className="relative w-16 flex justify-center group">
               <div className={`absolute -top-14 p-5 rounded-full shadow-2xl border-4 border-white transition-all ${dailyCheck || nurseCheck ? 'bg-red-500 text-white animate-pulse' : 'bg-slate-200 text-slate-400'}`}>
                 <Activity size={24} />
               </div>
