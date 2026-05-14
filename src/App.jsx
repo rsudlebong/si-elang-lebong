@@ -1013,21 +1013,30 @@ const App = () => {
     return { bg: 'bg-blue-50', text: 'text-blue-600', border: 'border-blue-200' };
   };
 
-  const filteredHistory = useMemo(() => activeTrips.filter(t => {
-    const matchStatus = t.status === 'COMPLETED';
-    
-    // Perbaiki logika pencocokan agar saat mode bulan, sistem hanya mencocokkan YYYY-MM
-    const datePrefix = filterMode === 'month' ? historyFilter.substring(0, 7) : historyFilter;
-    const matchDate = (!t.startTime || t.startTime.startsWith(datePrefix));
-    
-    const matchService = (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter);
-    
-    let matchRole = true;
-    if (role === 'driver') matchRole = t.driverId === username;
-    if (role === 'nurse' || role === 'doctor') matchRole = t.creatorId === username;
+  const filteredHistory = useMemo(() => {
+    const filtered = activeTrips.filter(t => {
+      const matchStatus = t.status === 'COMPLETED';
+      
+      // Perbaiki logika pencocokan agar saat mode bulan, sistem hanya mencocokkan YYYY-MM
+      const datePrefix = filterMode === 'month' ? historyFilter.substring(0, 7) : historyFilter;
+      const matchDate = (!t.startTime || t.startTime.startsWith(datePrefix));
+      
+      const matchService = (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter);
+      
+      let matchRole = true;
+      if (role === 'driver') matchRole = t.driverId === username;
+      if (role === 'nurse' || role === 'doctor') matchRole = t.creatorId === username;
 
-    return matchStatus && matchDate && matchService && matchRole;
-  }), [activeTrips, historyFilter, filterMode, historyServiceFilter, role, username]);
+      return matchStatus && matchDate && matchService && matchRole;
+    });
+
+    // Mengurutkan data berdasarkan tanggal terkecil (terlama) ke terbesar (terbaru)
+    return filtered.sort((a, b) => {
+      const timeA = a.startTime ? new Date(a.startTime).getTime() : 0;
+      const timeB = b.startTime ? new Date(b.startTime).getTime() : 0;
+      return timeA - timeB; // Ascending (Kecil ke Besar)
+    });
+  }, [activeTrips, historyFilter, filterMode, historyServiceFilter, role, username]);
 
   const visibleTrips = useMemo(() => activeTrips.filter(t => {
     if (t.status === 'PENDING') return true; 
