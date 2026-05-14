@@ -22,9 +22,6 @@ import {
   WifiOff, Moon, Sun, Maximize, Minimize, UploadCloud, X
 } from 'lucide-react';
 
-// ==========================================
-// KONFIGURASI SISTEM & UTILITIES
-// ==========================================
 const firebaseConfig = typeof __firebase_config !== 'undefined' && Object.keys(JSON.parse(__firebase_config)).length > 0 
   ? JSON.parse(__firebase_config) 
   : {
@@ -155,7 +152,6 @@ const calculateEWS = (vitals) => {
 const triggerDownload = async (blob, fileName) => {
   const cap = window.Capacitor;
   
-  // 1. CEK: Jika berjalan di Aplikasi Android (Native Capacitor)
   if (cap && cap.isNativePlatform && cap.isNativePlatform()) {
     try {
       const reader = new FileReader();
@@ -187,7 +183,6 @@ const triggerDownload = async (blob, fileName) => {
       downloadFallback(blob, fileName);
     }
   } else {
-    // 2. CEK: Jika berjalan di Browser / Web
     downloadFallback(blob, fileName);
   }
 };
@@ -229,11 +224,8 @@ const handleLogoError = (e) => {
   }
 };
 
-// --- FUNGSI MENGAMBIL LOGO (DIPERBARUI DENGAN CDN ANTI-CORS) ---
 const getSafeBase64Logo = async () => {
   try {
-    // Kita ambil langsung dari LOGO_URL (Google Drive) milik Anda,
-    // namun dilewatkan melalui CDN terpercaya (weserv) agar terbebas dari blokir keamanan Android.
     const cdnUrl = `https://images.weserv.nl/?url=${encodeURIComponent(LOGO_URL)}&output=png`;
     
     const response = await fetch(cdnUrl);
@@ -245,7 +237,6 @@ const getSafeBase64Logo = async () => {
       const reader = new FileReader();
       reader.onloadend = () => {
         let res = reader.result;
-        // Pastikan format akhirnya adalah base64 image/png
         if (res && res.includes('base64,')) {
            const base64Data = res.split('base64,')[1];
            resolve(`data:image/png;base64,${base64Data}`);
@@ -257,7 +248,7 @@ const getSafeBase64Logo = async () => {
     });
   } catch (e) {
     console.error("Logo gagal dimuat:", e);
-    return null; // Jika ini pun gagal, Lapis 3 (Teks SI-ELANG biru) akan otomatis muncul di fungsi PDF/Excel
+    return null; 
   }
 };
 
@@ -278,7 +269,6 @@ const NativeMapRender = ({ initialLat, initialLng, mapId, trackingId }) => {
     }
   }, [initialLat, initialLng, mapId]);
 
-  // MENCEGAH KEBOCORAN KUOTA: Peta hanya menarik 1 kordinat GPS tanpa menarik tabel rujukan utama
   useEffect(() => {
     if (!trackingId || !window.L || !mapRef.current) return;
     const unsub = onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'live_gps', trackingId), (snap) => {
@@ -339,7 +329,7 @@ const App = () => {
 
   const [now, setNow] = useState(new Date());
   const todayStr = new Date().toISOString().split('T')[0];
-  const [filterMode, setFilterMode] = useState('date');
+  const [filterMode, setFilterMode] = useState('month'); // Ubah default menjadi 'month'
   const [historyFilter, setHistoryFilter] = useState(todayStr);
   const [historyServiceFilter, setHistoryServiceFilter] = useState('all');
 
@@ -376,7 +366,7 @@ const App = () => {
   const lastGpsUpdate = useRef(0);
 
   const performLogout = useCallback(() => { 
-    localStorage.removeItem('si_elang_session'); // Hapus sesi lokal saat logout
+    localStorage.removeItem('si_elang_session');
     setView('login'); 
     setRole(null); 
     setUsername(null); 
@@ -391,7 +381,6 @@ const App = () => {
     setShowLogoutConfirm(true);
   }, []);
 
-  // CEK SESI TERSIMPAN SAAT APLIKASI DIBUKA (Auto-Login jika di-Swipe)
   useEffect(() => {
     const savedSession = localStorage.getItem('si_elang_session');
     if (savedSession) {
@@ -595,7 +584,6 @@ const App = () => {
     return () => { if (wakeLock.current) wakeLock.current.release().catch(()=>{}); if (bgKeepAlive.current) bgKeepAlive.current.pause(); document.removeEventListener('visibilitychange', handleVisibilityChange); }
   }, [role, dailyCheck]);
 
-  // PENDETEKSI PANGGILAN DARURAT & NOTIFIKASI
   useEffect(() => {
     if (role === 'driver' && user && dailyCheck) {
       const isBusy = activeTrips.some(t => t.status === 'OTW' && t.driverId === username);
@@ -606,7 +594,6 @@ const App = () => {
         const newCall = pendingTrips[0];
         setIncomingCall(newCall);
         
-        // 1. Play Audio Web (Jika aplikasi sedang terbuka)
         if (alarmAudio.current && alarmAudio.current.paused && audioUnlocked.current) alarmAudio.current.play().catch(() => {});
 
         if (notifiedTripId.current !== newCall.id) {
@@ -616,37 +603,32 @@ const App = () => {
 
           const cap = window.Capacitor;
           
-          // 2. TRIGGER NOTIFIKASI ALARM NATIVE ANDROID
           if (cap && cap.isNativePlatform() && cap.Plugins && cap.Plugins.LocalNotifications) {
             const LocalNotifications = cap.Plugins.LocalNotifications;
             
-            // Minta Izin Notifikasi (Untuk Android 13+)
             LocalNotifications.requestPermissions().then((perm) => {
               if (perm.display === 'granted') {
-                // Buat Channel Khusus Darurat (Penting agar notif muncul sebagai Popup/Heads-up)
                 LocalNotifications.createChannel({
                   id: 'emergency-alarms',
                   name: 'Alarm Darurat SI-ELANG',
                   description: 'Notifikasi Panggilan Ambulans',
-                  importance: 5, // 5 = MAX (Akan muncul melayang di layar dan berbunyi)
-                  visibility: 1, // Muncul di Lockscreen
+                  importance: 5,
+                  visibility: 1, 
                   vibration: true
                 }).then(() => {
-                  // Tembakkan Notifikasinya
                   LocalNotifications.schedule({
                     notifications: [{
                       title: titleText,
                       body: bodyText,
                       id: Math.floor(Math.random() * 100000),
                       channelId: 'emergency-alarms',
-                      schedule: { at: new Date(Date.now() + 500) } // Muncul seketika
+                      schedule: { at: new Date(Date.now() + 500) } 
                     }]
                   });
                 });
               }
             });
           } 
-          // 3. Fallback Notifikasi Browser (Web)
           else if ('Notification' in window && Notification.permission === 'granted') {
             if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(sw => sw.showNotification(titleText, { body: bodyText, icon: LOGO_URL, vibrate: [500, 250, 500, 250, 1000], requireInteraction: true, tag: 'emergency-call', renotify: true })).catch(()=>{});
             else { const notif = new Notification(titleText, { body: bodyText, icon: LOGO_URL, requireInteraction: true }); notif.onclick = () => { window.focus(); notif.close(); }; }
@@ -674,7 +656,6 @@ const App = () => {
 
             try { 
               lastGpsUpdate.current = now;
-              // MENCEGAH KEBOCORAN KUOTA: Tulis koordinat GPS ke tabel terpisah (live_gps)
               await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'live_gps', activeTripId), { 
                 lat: pos.coords.latitude, 
                 lng: pos.coords.longitude,
@@ -719,7 +700,6 @@ const App = () => {
     if (userFound) {
       const hashedInput = await hashPassword(p);
       if (userFound.pass === hashedInput || userFound.pass === p) {
-        // SIMPAN SESI KE PENYIMPANAN LOKAL SAAT LOGIN BERHASIL
         localStorage.setItem('si_elang_session', JSON.stringify({ u, role: userFound.role }));
         
         setUsername(u); setRole(userFound.role);
@@ -764,7 +744,7 @@ const App = () => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
     showToast('success', 'Data Pengguna Berhasil Diperbarui!');
     setEditUserMode(false); setEditingUsername(''); setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
-    setIsMobileFormOpen(false); // Tutup form di mobile setelah simpan
+    setIsMobileFormOpen(false); 
   };
 
   const confirmDeleteUser = async () => {
@@ -777,7 +757,6 @@ const App = () => {
     await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
     showToast('success', `Akun ${userToDelete} berhasil dihapus!`);
     
-    // Jika menghapus akun yang sedang diedit, bersihkan form dan tutup
     if(editUserMode && editingUsername === userToDelete) {
         setEditUserMode(false);
         setEditingUsername('');
@@ -788,7 +767,6 @@ const App = () => {
   };
 
   const deleteUserAccount = (uname) => {
-    // Memunculkan modal konfirmasi
     setUserToDelete(uname);
   };
 
@@ -796,7 +774,7 @@ const App = () => {
       setEditUserMode(true); 
       setEditingUsername(uname); 
       setUserForm({ ...data, username: uname, pass: '' }); 
-      setIsMobileFormOpen(true); // Buka form di mobile
+      setIsMobileFormOpen(true); 
       window.scrollTo({ top: 0, behavior: 'smooth' }); 
   };
 
@@ -862,7 +840,7 @@ const App = () => {
         triage: serviceType === 'jenazah' ? 'Hitam' : (formData.get('triage') || "Hijau"), eConsent: formData.get('eConsent') === 'on', 
         origin: formData.get('origin') || "", destination: finalDestination || "",
         dpjp: formData.get('dpjp') || '-', nurse: nurseCheck?.nurseName || 'Perawat Jaga',
-        creatorId: username, // Menyimpan ID perawat/petugas pembuat rujukan
+        creatorId: username, 
         serviceType: serviceType || "rujukan", paymentStatus: paymentStatus || "UMUM", 
         driver: 'Mencari Driver...', driverId: null, status: 'PENDING',
         startTime: new Date().toISOString(), vitals: { hr: 80, bp: "120/80", spo2: 98, temp: 36.5 },
@@ -922,6 +900,20 @@ const App = () => {
     } catch (err) { showToast('error', 'Gagal memproses foto.'); } finally { setLoading(false); }
   };
 
+  const removeOdometerPhoto = async (fieldType) => {
+    if (!user || !selectedTrip) return; 
+    setLoading(true);
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), { [fieldType]: null });
+      setSelectedTrip(prev => ({ ...prev, [fieldType]: null }));
+      showToast('success', 'Foto odometer berhasil dihapus.');
+    } catch (err) { 
+      showToast('error', 'Gagal menghapus foto.'); 
+    } finally { 
+      setLoading(false); 
+    }
+  };
+
   const handleKMValueChange = async (fieldType, value) => {
     if (!user || !selectedTrip || value === '') return;
     try {
@@ -976,7 +968,6 @@ const App = () => {
     setSelectedTrip(null); setView('home'); showToast('success', 'Tugas Selesai. Tersimpan di Riwayat.', 4000);
   };
 
-  // FUNGSI KHUSUS SUPERADMIN: Hapus Riwayat Permanen
   const confirmDeleteHistory = async () => {
     if (!tripToDelete || !user) return;
     setLoading(true);
@@ -991,7 +982,6 @@ const App = () => {
     }
   };
 
-  // FUNGSI BATAL/HAPUS RUJUKAN AKTIF
   const confirmCancelActiveTrip = async () => {
     if (!activeTripToCancel || !user) return;
     setLoading(true);
@@ -1000,7 +990,6 @@ const App = () => {
        showToast('success', 'Rujukan aktif berhasil dibatalkan dan dihapus.');
        setActiveTripToCancel(null);
        
-       // Jika pengguna sedang membuka detail rujukan yang dihapus, kembalikan ke Home
        if (selectedTrip?.id === activeTripToCancel.id) {
            setSelectedTrip(null);
            setView('home');
@@ -1026,24 +1015,26 @@ const App = () => {
 
   const filteredHistory = useMemo(() => activeTrips.filter(t => {
     const matchStatus = t.status === 'COMPLETED';
-    const matchDate = (!t.startTime || t.startTime.startsWith(historyFilter));
+    
+    // Perbaiki logika pencocokan agar saat mode bulan, sistem hanya mencocokkan YYYY-MM
+    const datePrefix = filterMode === 'month' ? historyFilter.substring(0, 7) : historyFilter;
+    const matchDate = (!t.startTime || t.startTime.startsWith(datePrefix));
+    
     const matchService = (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter);
     
-    // Batasi akses riwayat sesuai peran
     let matchRole = true;
     if (role === 'driver') matchRole = t.driverId === username;
     if (role === 'nurse' || role === 'doctor') matchRole = t.creatorId === username;
 
     return matchStatus && matchDate && matchService && matchRole;
-  }), [activeTrips, historyFilter, historyServiceFilter, role, username]);
+  }), [activeTrips, historyFilter, filterMode, historyServiceFilter, role, username]);
 
   const visibleTrips = useMemo(() => activeTrips.filter(t => {
-    if (t.status === 'PENDING') return true; // Semua pihak bisa melihat status pending
+    if (t.status === 'PENDING') return true; 
     if (t.status === 'OTW') {
-       // Batasi akses saat rujukan sedang OTW (aktif)
        if (role === 'driver') return t.driverId === username;
        if (role === 'nurse' || role === 'doctor') return t.creatorId === username;
-       return true; // Manajemen dan Superadmin tetap melihat semuanya
+       return true; 
     }
     return false;
   }), [activeTrips, role, username]);
@@ -1330,12 +1321,15 @@ const App = () => {
         <div className="grid grid-cols-1 gap-4">
           <div className="relative border-2 border-dashed border-slate-200 rounded-3xl p-6 text-center hover:bg-slate-50 transition-colors">
             {selectedTrip.kmStartPhoto ? (
-              <>
+              <div className="relative">
                 <img src={selectedTrip.kmStartPhoto} className="w-full h-32 object-cover rounded-2xl mb-4 re-invert" />
+                <button onClick={() => removeOdometerPhoto('kmStartPhoto')} disabled={loading} className="absolute top-2 right-2 p-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl shadow-lg transition-colors z-10" title="Hapus Foto">
+                   <Trash2 size={16} />
+                </button>
                 <div className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase flex items-center justify-center gap-1 mx-auto w-max">
                   <CheckCircle2 size={14}/> Tersimpan
                 </div>
-              </>
+              </div>
             ) : (
               <>
                 <div className="h-32 flex items-center justify-center text-slate-300 mb-4 bg-slate-50 rounded-2xl"><Camera size={40} /></div>
@@ -1348,12 +1342,15 @@ const App = () => {
           </div>
           <div className="relative border-2 border-dashed border-slate-200 rounded-3xl p-6 text-center hover:bg-slate-50 transition-colors">
             {selectedTrip.kmEndPhoto ? (
-              <>
+              <div className="relative">
                 <img src={selectedTrip.kmEndPhoto} className="w-full h-32 object-cover rounded-2xl mb-4 re-invert" />
+                <button onClick={() => removeOdometerPhoto('kmEndPhoto')} disabled={loading} className="absolute top-2 right-2 p-2.5 bg-red-500 hover:bg-red-600 text-white rounded-xl shadow-lg transition-colors z-10" title="Hapus Foto">
+                   <Trash2 size={16} />
+                </button>
                 <div className="bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase flex items-center justify-center gap-1 mx-auto w-max">
                   <CheckCircle2 size={14}/> Tersimpan
                 </div>
-              </>
+              </div>
             ) : (
               <>
                 <div className="h-32 flex items-center justify-center text-slate-300 mb-4 bg-slate-50 rounded-2xl"><Camera size={40} /></div>
@@ -1492,14 +1489,20 @@ const App = () => {
       if (!user || !selectedTrip) return;
       setLoading(true);
       try {
-          const currentDocs = selectedTrip.referralDocs || [];
-          const updatedDocs = currentDocs.filter(d => d.id !== docId);
+          if (docId === 'old-doc') {
+             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
+                referralDoc: null, referralDocName: null, referralDocType: null
+             });
+             setSelectedTrip(prev => ({ ...prev, referralDoc: null, referralDocName: null, referralDocType: null }));
+          } else {
+             const currentDocs = selectedTrip.referralDocs || [];
+             const updatedDocs = currentDocs.filter(d => d.id !== docId);
 
-          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
-            referralDocs: updatedDocs
-          });
-
-          setSelectedTrip(prev => ({ ...prev, referralDocs: updatedDocs }));
+             await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
+               referralDocs: updatedDocs
+             });
+             setSelectedTrip(prev => ({ ...prev, referralDocs: updatedDocs }));
+          }
           showToast('success', 'Berkas berhasil dihapus.');
       } catch(e) { showToast('error', 'Gagal menghapus berkas.'); } finally { setLoading(false); }
   };
@@ -1849,7 +1852,6 @@ const App = () => {
   const isHomeActive = (view === 'home' || view === 'management' || view === 'superadmin') && !selectedTrip && view !== 'history';
   const isHistoryActive = view === 'history';
 
-  // Variabel baru untuk mengambil Nama Tampilan sesuai username yang aktif
   const currentUserData = appUsers[username] || DEFAULT_USERS[username];
   const userDisplayName = currentUserData ? currentUserData.name : username;
 
@@ -1888,7 +1890,6 @@ const App = () => {
         </div>
       )}
 
-      {/* Modal Hapus Riwayat Khusus Superadmin */}
       {tripToDelete && (
         <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
@@ -1909,7 +1910,6 @@ const App = () => {
         </div>
       )}
 
-      {/* Modal Hapus Akun User Khusus Superadmin */}
       {userToDelete && (
         <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
@@ -1930,7 +1930,6 @@ const App = () => {
         </div>
       )}
 
-      {/* Modal Batal/Hapus Rujukan Aktif */}
       {activeTripToCancel && (
         <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl p-6 lg:p-8 max-w-sm w-full shadow-2xl text-center animate-in zoom-in-95">
@@ -1968,7 +1967,7 @@ const App = () => {
           </div>
           <div className="flex-1 w-full relative z-0">
             <NativeMapRender 
-              initialLat={-3.1950} // Kordinat pusat standby (Lebong)
+              initialLat={-3.1950} 
               initialLng={102.1648} 
               mapId={`map-fs-${fullScreenMapId}`} 
               trackingId={fullScreenMapId}
@@ -2094,7 +2093,6 @@ const App = () => {
           <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
             <img src={LOGO_URL} onError={handleLogoError} alt="SI-ELANG" className={`w-[130px] sm:w-[180px] h-auto max-h-[45px] sm:max-h-[60px] object-contain shrink-0 mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
             <div className="flex flex-col justify-center overflow-hidden">
-              {/* Tambahkan baris ini agar username terlihat di versi mobile */}
               <p className="font-bold text-xs text-slate-800 truncate leading-none mb-0.5">{userDisplayName}</p>
               <p className="font-bold text-[9px] sm:text-[10px] uppercase text-blue-600 tracking-widest bg-blue-50 px-2 py-1 rounded w-max border border-blue-100 truncate">
                 {role === 'management' ? 'Manajemen' : role === 'doctor' ? 'Dokter' : role === 'nurse' ? 'Perawat' : role}
@@ -2628,7 +2626,6 @@ const App = () => {
                   <Key className="absolute -right-4 -bottom-4 opacity-10 pointer-events-none" size={150} />
                 </div>
                 
-                {/* Tombol Toggle Form di HP */}
                 <div className="lg:hidden flex justify-between items-center bg-white p-4 rounded-[1.5rem] shadow-sm border border-slate-200">
                     <div>
                         <h4 className="font-black text-blue-900">Form Pengguna</h4>
@@ -2680,9 +2677,6 @@ const App = () => {
                   <div className="lg:col-span-8 bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
                     <div className="p-6 border-b border-slate-100 bg-slate-50"><h4 className="text-base font-black text-blue-900">Daftar Akun Sistem Terdaftar</h4></div>
                     <div className="divide-y divide-slate-100">
-                      {/* Pembaruan: Kita menggabungkan DEFAULT_USERS dengan appUsers saat rendering 
-                          agar akun admin & superadmin selalu ter-list tanpa perlu menyimpan ulang ke database.
-                      */}
                       {Object.entries({ ...DEFAULT_USERS, ...appUsers }).map(([uname, data]) => (
                         <div key={uname} className="p-4 lg:p-6 flex flex-col sm:flex-row sm:justify-between sm:items-center hover:bg-slate-50 transition-colors gap-4">
                           <div className="flex items-center gap-4">
@@ -2764,7 +2758,6 @@ const App = () => {
                             <th className="p-4 text-center border border-slate-300">Bukti Foto (KM)</th>
                             <th className="p-4 text-center border border-slate-300">Berkas Rujukan</th>
                             <th className="p-4 text-center border border-slate-300">Durasi</th>
-                            {/* KHUSUS SUPERADMIN: Kolom Aksi */}
                             {role === 'superadmin' && <th className="p-4 text-center border border-slate-300">Aksi</th>}
                           </tr>
                         </thead>
@@ -2799,12 +2792,12 @@ const App = () => {
                                 <td className="p-4 text-center border border-slate-200">
                                   <div className="flex items-center justify-center gap-2">
                                     {trip.kmStartPhoto ? (
-                                      <img src={trip.kmStartPhoto} alt="Awal" className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative cursor-pointer shadow-sm re-invert" title={`KM Awal: ${trip.kmStartValue}`} />
+                                      <img src={trip.kmStartPhoto} alt="Awal" onClick={() => downloadFile(trip.kmStartPhoto, `KM_Awal_${trip.patientName.replace(/\s+/g, '_')}.jpg`)} className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative cursor-pointer shadow-sm re-invert" title={`Klik Unduh KM Awal: ${trip.kmStartValue}`} />
                                     ) : (
                                       <div className="w-10 h-10 bg-slate-100 rounded border border-slate-200 border-dashed flex items-center justify-center text-[8px] text-slate-400">N/A</div>
                                     )}
                                     {trip.kmEndPhoto ? (
-                                      <img src={trip.kmEndPhoto} alt="Akhir" className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative cursor-pointer shadow-sm re-invert" title={`KM Akhir: ${trip.kmEndValue}`} />
+                                      <img src={trip.kmEndPhoto} alt="Akhir" onClick={() => downloadFile(trip.kmEndPhoto, `KM_Akhir_${trip.patientName.replace(/\s+/g, '_')}.jpg`)} className="w-10 h-10 object-cover rounded border border-slate-300 hover:scale-[2.5] origin-center transition-transform z-10 relative cursor-pointer shadow-sm re-invert" title={`Klik Unduh KM Akhir: ${trip.kmEndValue}`} />
                                     ) : (
                                       <div className="w-10 h-10 bg-slate-100 rounded border border-slate-200 border-dashed flex items-center justify-center text-[8px] text-slate-400">N/A</div>
                                     )}
@@ -2855,7 +2848,6 @@ const App = () => {
                                   <span className="bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-lg">{getDuration(trip.startTime, trip.endTime)}m</span>
                                 </td>
 
-                                {/* KHUSUS SUPERADMIN: Tombol Hapus */}
                                 {role === 'superadmin' && (
                                   <td className="p-4 text-center border border-slate-200">
                                     <button onClick={() => setTripToDelete(trip)} className="p-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors shadow-sm" title="Hapus Permanen">
