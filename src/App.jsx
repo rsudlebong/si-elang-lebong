@@ -1120,7 +1120,13 @@ const App = () => {
         const script = document.createElement('script'); script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
         await new Promise((res) => { script.onload = res; document.head.appendChild(script); });
       }
-      if (!window.jspdf.jsPDF.API.autoTable) {
+      
+      // PERBAIKAN BUG: jspdf-autotable mewajibkan adanya variabel global 'jsPDF'
+      if (!window.jsPDF) {
+        window.jsPDF = window.jspdf.jsPDF;
+      }
+
+      if (!window.jsPDF.API.autoTable) {
         const script2 = document.createElement('script'); script2.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.1/jspdf.plugin.autotable.min.js';
         await new Promise((res) => { script2.onload = res; document.head.appendChild(script2); });
       }
@@ -1234,7 +1240,11 @@ const App = () => {
       const pdfBlob = doc.output('blob');
       await triggerDownload(pdfBlob, `Laporan_SI-ELANG_${historyFilter}.pdf`);
       showToast('success', 'PDF berhasil diunduh!');
-    } catch (err) { showToast('error', 'Gagal membuat PDF.'); }
+    } catch (err) { 
+      // Saya tambahkan logging error ke konsol agar jika terjadi masalah lagi, detailnya mudah dilacak.
+      console.error("Cetak PDF Error:", err);
+      showToast('error', 'Gagal membuat PDF. Silakan coba kembali.'); 
+    }
   };
 
   const MessageToast = () => msg && (
