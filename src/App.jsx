@@ -1121,7 +1121,6 @@ const App = () => {
         await new Promise((res) => { script.onload = res; document.head.appendChild(script); });
       }
       
-      // PERBAIKAN BUG: jspdf-autotable mewajibkan adanya variabel global 'jsPDF'
       if (!window.jsPDF) {
         window.jsPDF = window.jspdf.jsPDF;
       }
@@ -1179,6 +1178,7 @@ const App = () => {
 
       doc.autoTable({
         startY: 40, head: head, body: body, theme: 'grid',
+        rowPageBreak: 'avoid', // PENGAMAN: Mencegah baris (yang memuat foto) terbelah jadi 2 halaman
         styles: { fontSize: 8, cellPadding: 3, valign: 'middle', font: 'helvetica', lineWidth: 0.2, lineColor: [150, 150, 150] },
         headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', halign: 'center' },
         columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 32, minCellHeight: 18 }, 10: { cellWidth: 32, minCellHeight: 18 }, 11: { halign: 'center' } },
@@ -1186,6 +1186,7 @@ const App = () => {
         didParseCell: function(data) {
           if (data.section === 'body' && data.column.index === 10) {
             const trip = filteredHistory[data.row.index];
+            if (!trip) return;
             const numDocs = trip.referralDocs ? trip.referralDocs.length : (trip.referralDoc ? 1 : 0);
             if (numDocs > 2) {
               const rowsNeeded = Math.ceil(numDocs / 2);
@@ -1196,7 +1197,9 @@ const App = () => {
         
         didDrawCell: function(data) {
           if (data.section === 'body') { 
-            const trip = filteredHistory[data.row.index]; let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
+            const trip = filteredHistory[data.row.index]; 
+            if (!trip) return; // PENGAMAN
+            let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
             
             if (data.column.index === 9) {
               if (trip.kmStartPhoto) { try { doc.addImage(trip.kmStartPhoto, 'JPEG', xPos, yPos, imgSize, imgSize); } catch(e) {} }
@@ -1215,7 +1218,9 @@ const App = () => {
                     currentX = startX;
                     currentY += imgSize + 2;
                   }
-                  if (docItem.type.startsWith('image/')) {
+                  // PENGAMAN: Cek aman jika docItem.type / url di data lama ada yang kosong
+                  const isImage = (docItem.type && docItem.type.startsWith('image/')) || (docItem.url && docItem.url.startsWith('data:image'));
+                  if (isImage) {
                     try { doc.addImage(docItem.url, 'JPEG', currentX, currentY, imgSize, imgSize); } catch(e) {}
                   } else {
                     doc.setFontSize(7); doc.setTextColor(0, 0, 255); doc.text("PDF", currentX + 3, currentY + 8);
@@ -1223,7 +1228,8 @@ const App = () => {
                   currentX += imgSize + 2; count++;
                 }
               } else if (trip.referralDoc) {
-                if (trip.referralDocType?.startsWith('image/') || trip.referralDoc.startsWith('data:image')) {
+                const isOldImage = (trip.referralDocType && trip.referralDocType.startsWith('image/')) || (trip.referralDoc && trip.referralDoc.startsWith('data:image'));
+                if (isOldImage) {
                   try { doc.addImage(trip.referralDoc, 'JPEG', currentX, currentY, imgSize, imgSize); } catch(e) {}
                 } else {
                   doc.setFontSize(7); doc.setTextColor(0, 0, 255); doc.text("PDF", currentX + 3, currentY + 8);
@@ -1241,7 +1247,6 @@ const App = () => {
       await triggerDownload(pdfBlob, `Laporan_SI-ELANG_${historyFilter}.pdf`);
       showToast('success', 'PDF berhasil diunduh!');
     } catch (err) { 
-      // Saya tambahkan logging error ke konsol agar jika terjadi masalah lagi, detailnya mudah dilacak.
       console.error("Cetak PDF Error:", err);
       showToast('error', 'Gagal membuat PDF. Silakan coba kembali.'); 
     }
