@@ -45,10 +45,11 @@ const APP_ICON_URL = "https://drive.google.com/thumbnail?id=1XOT6V9mHhCPnoDqEKQy
 const RAW_SECRET_KEY = "AmbulanceProSecure2024!_MED_SECURE_SALT";
 
 const getAESKey = async () => {
+  if (!window.crypto || !window.crypto.subtle) throw new Error("No Crypto");
   const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.digest('SHA-256', enc.encode(RAW_SECRET_KEY));
+  const keyMaterial = await window.crypto.subtle.digest('SHA-256', enc.encode(RAW_SECRET_KEY));
   
-  return await crypto.subtle.importKey(
+  return await window.crypto.subtle.importKey(
    'raw', 
     keyMaterial, 
     { name: 'AES-GCM' }, 
@@ -60,10 +61,11 @@ const getAESKey = async () => {
 const encryptData = async (text) => {
   if (!text) return text;
   try {
+    if (!window.crypto || !window.crypto.subtle) return text;
     const key = await getAESKey();
     const enc = new TextEncoder();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertextBuffer = await crypto.subtle.encrypt(
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const ciphertextBuffer = await window.crypto.subtle.encrypt(
       { name: 'AES-GCM', iv: iv },
       key,
       enc.encode(text)
@@ -80,6 +82,7 @@ const encryptData = async (text) => {
 const decryptData = async (encryptedBase64) => {
   if (!encryptedBase64) return encryptedBase64;
   try {
+    if (!window.crypto || !window.crypto.subtle) return encryptedBase64;
     const key = await getAESKey();
     const binaryStr = atob(encryptedBase64);
     const combinedArray = new Uint8Array(binaryStr.length);
@@ -88,7 +91,7 @@ const decryptData = async (encryptedBase64) => {
     }
     const iv = combinedArray.slice(0, 12);
     const ciphertextBuffer = combinedArray.slice(12);
-    const decryptedBuffer = await crypto.subtle.decrypt(
+    const decryptedBuffer = await window.crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: iv },
       key,
       ciphertextBuffer
@@ -109,10 +112,15 @@ const maskSensitiveData = (text, role, status) => {
 };
 
 const hashPassword = async (password) => {
-  const msgBuffer = new TextEncoder().encode(password);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  try {
+    if (!window.crypto || !window.crypto.subtle) return password;
+    const msgBuffer = new TextEncoder().encode(password);
+    const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return password;
+  }
 };
 
 const compressImage = (file) => {
@@ -517,8 +525,13 @@ const App = () => {
   useEffect(() => {
     if (!user || !username) return; 
     
+    // Pengaman Race-Condition
+    let isSubscribed = true;
+    let snapshotCounter = 0;
+
     const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
     const unsubscribeUsers = onSnapshot(usersRef, (docSnap) => {
+        if (!isSubscribed) return;
         if (docSnap.exists()) setAppUsers(docSnap.data()); 
         else { setDoc(usersRef, DEFAULT_USERS).catch((err) => console.error(err)); setAppUsers(DEFAULT_USERS); }
       }
@@ -526,6 +539,9 @@ const App = () => {
 
     const tripsRef = collection(db, 'artifacts', appId, 'public', 'data', 'trips');
     const unsubscribeTrips = onSnapshot(tripsRef, async (snapshot) => {
+        snapshotCounter++;
+        const currentCounter = snapshotCounter;
+
         const dataPromises = snapshot.docs.map(async (doc) => {
           const raw = doc.data(); 
           return { 
@@ -535,12 +551,21 @@ const App = () => {
             diagnosis: await decryptData(raw.diagnosis) || raw.diagnosis 
           };
         });
+        
         const data = await Promise.all(dataPromises);
-        setActiveTrips(data);
+        
+        // Hanya update state jika ini adalah data snapshot paling mutakhir
+        if (isSubscribed && currentCounter === snapshotCounter) {
+            setActiveTrips(data);
+        }
       }
     );
 
-    return () => { unsubscribeUsers(); unsubscribeTrips(); };
+    return () => { 
+        isSubscribed = false; 
+        unsubscribeUsers(); 
+        unsubscribeTrips(); 
+    };
   }, [user, username]);
 
   useEffect(() => {
@@ -1025,7 +1050,8 @@ const App = () => {
       
       let matchRole = true;
       if (role === 'driver') matchRole = t.driverId === username;
-      if (role === 'nurse' || role === 'doctor') matchRole = t.creatorId === username;
+      // Perbaikan: Dokter dibebaskan agar bisa memantau semua riwayat, batasan HANYA untuk Perawat
+      if (role === 'nurse') matchRole = !t.creatorId || t.creatorId === username;
 
       return matchStatus && matchDate && matchService && matchRole;
     });
@@ -1042,7 +1068,8 @@ const App = () => {
     if (t.status === 'PENDING') return true; 
     if (t.status === 'OTW') {
        if (role === 'driver') return t.driverId === username;
-       if (role === 'nurse' || role === 'doctor') return t.creatorId === username;
+       // Perbaikan: Dokter (serta manajemen/superadmin) bebas melihat semua rujukan OTW untuk pantau TTV
+       if (role === 'nurse') return !t.creatorId || t.creatorId === username;
        return true; 
     }
     return false;
