@@ -304,9 +304,9 @@ const NativeMapRender = ({ initialLat, initialLng, mapId, trackingId }) => {
 const DEFAULT_USERS = {
   'superadmin': { pass: 'superadmin123', role: 'superadmin', name: 'Super Administrator' },
   'admin': { pass: 'admin123', role: 'management', name: 'Kepala Ruangan / Manajemen' },
-  'driver1': { pass: 'driver123', role: 'driver', name: 'Budi (Driver Utama)' },
-  'nurse1': { pass: 'nurse123', role: 'nurse', name: 'Suster Siti' },
-  'doctor1': { pass: 'doctor123', role: 'doctor', name: 'dr. Andi (RS Asal)' }
+  'driver1': { pass: 'driver123', role: 'driver', name: 'Driver1' },
+  'nurse1': { pass: 'nurse123', role: 'nurse', name: 'Perawat' },
+  'doctor1': { pass: 'doctor123', role: 'doctor', name: 'Dokter' }
 };
 
 const App = () => {
@@ -522,20 +522,27 @@ const App = () => {
     return () => { unsubscribe(); clearInterval(intervalId); document.removeEventListener('click', unlockAudio); document.removeEventListener('touchstart', unlockAudio); if (alarmAudio.current) alarmAudio.current.pause(); };
   }, []);
 
+  // EFEK 1: AMBIL DATA USERS (Harus jalan di layar depan/login agar data tidak kosong/hilang saat daftar akun baru)
+  useEffect(() => {
+    if (!user) return; 
+
+    const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
+    const unsubscribeUsers = onSnapshot(usersRef, (docSnap) => {
+        if (docSnap.exists()) setAppUsers(docSnap.data()); 
+        else { setDoc(usersRef, DEFAULT_USERS).catch((err) => console.error(err)); setAppUsers(DEFAULT_USERS); }
+      }
+    );
+
+    return () => unsubscribeUsers();
+  }, [user]);
+
+  // EFEK 2: AMBIL DATA RUJUKAN (Hanya boleh jalan setelah pengguna sukses masuk / Login)
   useEffect(() => {
     if (!user || !username) return; 
     
     // Pengaman Race-Condition
     let isSubscribed = true;
     let snapshotCounter = 0;
-
-    const usersRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
-    const unsubscribeUsers = onSnapshot(usersRef, (docSnap) => {
-        if (!isSubscribed) return;
-        if (docSnap.exists()) setAppUsers(docSnap.data()); 
-        else { setDoc(usersRef, DEFAULT_USERS).catch((err) => console.error(err)); setAppUsers(DEFAULT_USERS); }
-      }
-    );
 
     const tripsRef = collection(db, 'artifacts', appId, 'public', 'data', 'trips');
     const unsubscribeTrips = onSnapshot(tripsRef, async (snapshot) => {
@@ -563,7 +570,6 @@ const App = () => {
 
     return () => { 
         isSubscribed = false; 
-        unsubscribeUsers(); 
         unsubscribeTrips(); 
     };
   }, [user, username]);
@@ -748,7 +754,8 @@ const App = () => {
 
     try {
       const hashedPassword = await hashPassword(p);
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), { ...appUsers, [u]: { pass: hashedPassword, role: r, name: n } });
+      // PENGAMAN ABSOLUT: Memakai flag { merge: true } agar data yang sudah ada TIDAK MUNGKIN TERHAPUS/TERTIMPA.
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), { [u]: { pass: hashedPassword, role: r, name: n } }, { merge: true });
       setIsRegistering(false); showToast('success', 'Pendaftaran Berhasil! Silakan Login.');
     } catch (err) { showToast('error', 'Terjadi kesalahan saat mendaftar.'); } finally { setLoading(false); }
   };
@@ -980,7 +987,7 @@ const App = () => {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', selectedTrip.id), {
         instructions: arrayUnion({
           text: text || "", type: msgType, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          sender: role === 'doctor' ? 'DOKTER IGD ASAL' : (role === 'nurse' ? 'PERAWAT' : (role === 'management' ? 'MANAJEMEN' : (role ? role.toUpperCase() : 'SISTEM'))),
+          sender: role === 'doctor' ? 'DOKTER' : (role === 'nurse' ? 'PERAWAT' : (role === 'management' ? 'MANAJEMEN' : (role ? role.toUpperCase() : 'SISTEM'))),
           image: imageBase64 || null, audio: audioBase64 || null
         })
       });
@@ -1808,88 +1815,38 @@ const App = () => {
             <img src={LOGO_URL} onError={handleLogoError} alt="Logo" className={`w-[90%] max-w-[350px] h-auto object-contain mb-4 transition-all mix-blend-multiply ${darkMode ? 'dark-logo-fix' : 're-invert'}`} />
           </div>
 
-          {!isRegistering ? (
-            <form onSubmit={handleLogin} className="space-y-5 animate-in fade-in">
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block ml-1">Akses Username</label>
-                <div className="relative">
-                  <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input name="username" placeholder="ID Petugas / Username" required className={`${inputStyle} pl-11 pr-5`} />
-                </div>
-              </div>
-              
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block ml-1">Kata Sandi</label>
-                <div className="relative">
-                  <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input name="password" type={showPassword ? "text" : "password"} placeholder="••••••••" required className={`${inputStyle} pl-11 pr-12`} />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-              
-              <div className="flex justify-between items-center px-1 mt-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                  <span className="text-xs font-medium text-slate-500 select-none">Ingat Saya</span>
-                </label>
-                <button type="button" onClick={() => showToast('error', 'Silakan hubungi Tim IT/Admin untuk reset.', 1500)} className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-all">Lupa Password?</button>
-              </div>
-              
-              <button type="submit" className="w-full bg-gradient-to-r from-blue-700 via-blue-600 to-red-600 hover:from-blue-800 hover:to-red-700 text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all mt-6 flex justify-center items-center gap-3 text-sm tracking-widest">
-                <Rocket size={18} /> MASUK SISTEM
-              </button>
-              
-              <div className="flex items-center gap-4 my-6 opacity-60">
-                <div className="flex-1 h-px bg-slate-300"></div>
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Atau</span>
-                <div className="flex-1 h-px bg-slate-300"></div>
-              </div>
-
-              <button type="button" onClick={() => setIsRegistering(true)} className="w-full bg-white border border-slate-200 text-slate-500 font-black py-4 rounded-2xl hover:bg-slate-50 active:scale-95 transition-all text-[11px] tracking-widest uppercase">
-                Pendaftaran Petugas Baru
-              </button>
-            </form>
-          ) : (
-            <form onSubmit={handleRegister} className="space-y-4 animate-in fade-in">
-              <div className="mb-4 text-center">
-                <h2 className="font-black text-xl text-blue-900 uppercase">Pendaftaran Baru</h2>
-                <p className="text-xs text-slate-500 font-medium mt-1">Lengkapi data Anda di bawah ini</p>
-              </div>
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block ml-1">Username <span className="text-red-500">*</span></label>
-                <input name="username" placeholder="cth: perawat_budi" required className="w-full bg-white px-4 py-3.5 rounded-2xl border-2 border-slate-200 focus:border-blue-600 focus:shadow-[0_0_0_4px_rgba(37,99,235,0.1)] outline-none text-sm font-bold transition-all" />
-              </div>
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block ml-1">Nama Lengkap <span className="text-red-500">*</span></label>
-                <input name="fullName" placeholder="Budi Santoso" required className="w-full bg-white px-4 py-3.5 rounded-2xl border-2 border-slate-200 focus:border-blue-600 focus:shadow-[0_0_0_4px_rgba(37,99,235,0.1)] outline-none text-sm font-bold transition-all" />
-              </div>
+          <form onSubmit={handleLogin} className="space-y-5 animate-in fade-in">
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block ml-1">Akses Username</label>
               <div className="relative">
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block ml-1">Password <span className="text-red-500">*</span></label>
-                <input name="password" type={showPassword ? "text" : "password"} placeholder="Minimal 6 karakter" required minLength="6" className="w-full bg-white px-4 py-3.5 rounded-2xl border-2 border-slate-200 focus:border-blue-600 focus:shadow-[0_0_0_4px_rgba(37,99,235,0.1)] outline-none text-sm font-bold transition-all" />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 bottom-3.5 text-slate-400 hover:text-blue-600">
-                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                <User size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input name="username" placeholder="ID Petugas / Username" required className={`${inputStyle} pl-11 pr-5`} />
+              </div>
+            </div>
+            
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 block ml-1">Kata Sandi</label>
+              <div className="relative">
+                <Lock size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input name="password" type={showPassword ? "text" : "password"} placeholder="••••••••" required className={`${inputStyle} pl-11 pr-12`} />
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500">
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
-              <div>
-                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1 block ml-1">Peran Akses <span className="text-red-500">*</span></label>
-                <select name="role" required className="w-full bg-white px-4 py-3.5 rounded-2xl border-2 border-slate-200 focus:border-blue-600 focus:shadow-[0_0_0_4px_rgba(37,99,235,0.1)] outline-none text-sm font-bold text-slate-700 cursor-pointer transition-all">
-                  <option value="nurse">Perawat / Nakes</option>
-                  <option value="driver">Driver Ambulans</option>
-                  <option value="doctor">Dokter / DPJP</option>
-                  <option value="management">Manajemen / Admin</option>
-                  <option value="superadmin">Super Admin</option>
-                </select>
-              </div>
-              <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-blue-700 via-blue-600 to-red-600 text-white font-black py-4 rounded-2xl shadow-lg active:scale-95 mt-4 flex justify-center items-center gap-2 text-xs tracking-widest uppercase transition-all">
-                {loading ? 'MEMPROSES...' : 'DAFTAR SEKARANG'}
-              </button>
-              <div className="mt-4 text-center border-t border-slate-100 pt-5">
-                <button type="button" onClick={() => setIsRegistering(false)} className="text-slate-500 font-bold text-xs hover:text-blue-600 mx-auto transition-all">← Kembali ke Halaman Login</button>
-              </div>
-            </form>
-          )}
+            </div>
+            
+            <div className="flex justify-between items-center px-1 mt-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                <span className="text-xs font-medium text-slate-500 select-none">Ingat Saya</span>
+              </label>
+              <button type="button" onClick={() => showToast('error', 'Silakan hubungi Tim IT/Admin untuk reset.', 1500)} className="text-xs font-bold text-blue-600 hover:text-blue-800 transition-all">Lupa Password?</button>
+            </div>
+            
+            <button type="submit" className="w-full bg-gradient-to-r from-blue-700 via-blue-600 to-red-600 hover:from-blue-800 hover:to-red-700 text-white font-black py-4 rounded-2xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all mt-6 flex justify-center items-center gap-3 text-sm tracking-widest">
+              <Rocket size={18} /> MASUK SISTEM
+            </button>
+          </form>
         </div>
 
         <div className="mt-8 relative z-10 flex items-center justify-center gap-2 text-slate-500 opacity-80">
@@ -2476,7 +2433,7 @@ const App = () => {
                 </div>
 
                 <div className="space-y-4 pt-6 border-t border-slate-100">
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-500 ml-1">Rute & Tim Medis</label>
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-500 ml-1">Tim Medis</label>
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                     <input name="dpjp" placeholder={serviceType === 'jenazah' ? "Dokter Pemeriksa (Opsional)" : "Dokter DPJP"} className="w-full p-4 bg-blue-50 border border-blue-200 rounded-2xl text-sm focus:border-blue-500 font-bold text-blue-900 outline-none transition-colors" required={serviceType === 'rujukan'} />
                     <input name="origin" placeholder={serviceType === 'jenazah' ? "Kamar Jenazah / IGD" : "Ruangan Asal"} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:border-blue-500 font-semibold outline-none transition-colors" required />
