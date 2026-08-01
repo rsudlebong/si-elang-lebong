@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { initializeApp } from 'firebase/app';
 import {
   getFirestore, collection, doc, setDoc, onSnapshot,
-  addDoc, updateDoc, arrayUnion, getDoc, deleteDoc
+  addDoc, updateDoc, arrayUnion, getDoc, deleteDoc, deleteField
 } from 'firebase/firestore';
 import {
   getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged
@@ -235,12 +235,9 @@ const handleLogoError = (e) => {
 const getSafeBase64Logo = async () => {
   try {
     const cdnUrl = `https://images.weserv.nl/?url=${encodeURIComponent(LOGO_URL)}&output=png`;
-    
     const response = await fetch(cdnUrl);
     if (!response.ok) throw new Error('Gagal mengambil logo dari CDN');
-    
     const blob = await response.blob();
-    
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -302,11 +299,43 @@ const NativeMapRender = ({ initialLat, initialLng, mapId, trackingId }) => {
 };
 
 const DEFAULT_USERS = {
+  // Akun Inti / Manajemen
   'superadmin': { pass: 'superadmin123', role: 'superadmin', name: 'Super Administrator' },
   'admin': { pass: 'admin123', role: 'management', name: 'Kepala Ruangan / Manajemen' },
+  
+  // Akun Lama (Legacy)
   'driver1': { pass: 'driver123', role: 'driver', name: 'Driver1' },
   'nurse1': { pass: 'nurse123', role: 'nurse', name: 'Perawat' },
-  'doctor1': { pass: 'doctor123', role: 'doctor', name: 'Dokter' }
+  'doctor1': { pass: 'doctor123', role: 'doctor', name: 'Dokter' },
+
+  // Perawat Tambahan
+  'perawat1': { pass: 'perawat123', role: 'nurse', name: 'Perawat 1' },
+  'perawat2': { pass: 'perawat123', role: 'nurse', name: 'Perawat 2' },
+  'perawat3': { pass: 'perawat123', role: 'nurse', name: 'Perawat 3' },
+  'perawat4': { pass: 'perawat123', role: 'nurse', name: 'Perawat 4' },
+  'perawat5': { pass: 'perawat123', role: 'nurse', name: 'Perawat 5' },
+  'perawat6': { pass: 'perawat123', role: 'nurse', name: 'Perawat 6' },
+  'perawat7': { pass: 'perawat123', role: 'nurse', name: 'Perawat 7' },
+  'perawat8': { pass: 'perawat123', role: 'nurse', name: 'Perawat 8' },
+  'perawat9': { pass: 'perawat123', role: 'nurse', name: 'Perawat 9' },
+  'perawat10': { pass: 'perawat123', role: 'nurse', name: 'Perawat 10' },
+
+  // Supir / Driver Tambahan
+  'supir1': { pass: 'supir123', role: 'driver', name: 'Supir 1' },
+  'supir2': { pass: 'supir123', role: 'driver', name: 'Supir 2' },
+  'supir3': { pass: 'supir123', role: 'driver', name: 'Supir 3' },
+  'supir4': { pass: 'supir123', role: 'driver', name: 'Supir 4' },
+  'supir5': { pass: 'supir123', role: 'driver', name: 'Supir 5' },
+  'supir6': { pass: 'supir123', role: 'driver', name: 'Supir 6' },
+  'supir7': { pass: 'supir123', role: 'driver', name: 'Supir 7' },
+  'supir8': { pass: 'supir123', role: 'driver', name: 'Supir 8' },
+  'supir9': { pass: 'supir123', role: 'driver', name: 'Supir 9' },
+  'supir10': { pass: 'supir123', role: 'driver', name: 'Supir 10' },
+
+  // Dokter Tambahan
+  'dokter1': { pass: 'dokter123', role: 'doctor', name: 'Dokter 1' },
+  'dokter2': { pass: 'dokter123', role: 'doctor', name: 'Dokter 2' },
+  'dokter3': { pass: 'dokter123', role: 'doctor', name: 'Dokter 3' }
 };
 
 const App = () => {
@@ -337,7 +366,7 @@ const App = () => {
 
   const [now, setNow] = useState(new Date());
   const todayStr = new Date().toISOString().split('T')[0];
-  const [filterMode, setFilterMode] = useState('month'); // Ubah default menjadi 'month'
+  const [filterMode, setFilterMode] = useState('month'); 
   const [historyFilter, setHistoryFilter] = useState(todayStr);
   const [historyServiceFilter, setHistoryServiceFilter] = useState('all');
 
@@ -351,13 +380,9 @@ const App = () => {
   const [editingUsername, setEditingUsername] = useState('');
   const [userForm, setUserForm] = useState({ username: '', name: '', pass: '', role: 'nurse' });
   
-  // State untuk form di Mobile
   const [isMobileFormOpen, setIsMobileFormOpen] = useState(false);
-  // State untuk modal hapus riwayat
   const [tripToDelete, setTripToDelete] = useState(null);
-  // State untuk modal hapus user
   const [userToDelete, setUserToDelete] = useState(null);
-  // State untuk modal batal/hapus rujukan aktif
   const [activeTripToCancel, setActiveTripToCancel] = useState(null);
 
   const alarmAudio = useRef(null);
@@ -522,7 +547,6 @@ const App = () => {
     return () => { unsubscribe(); clearInterval(intervalId); document.removeEventListener('click', unlockAudio); document.removeEventListener('touchstart', unlockAudio); if (alarmAudio.current) alarmAudio.current.pause(); };
   }, []);
 
-  // EFEK 1: AMBIL DATA USERS (Harus jalan di layar depan/login agar data tidak kosong/hilang saat daftar akun baru)
   useEffect(() => {
     if (!user) return; 
 
@@ -536,11 +560,9 @@ const App = () => {
     return () => unsubscribeUsers();
   }, [user]);
 
-  // EFEK 2: AMBIL DATA RUJUKAN (Hanya boleh jalan setelah pengguna sukses masuk / Login)
   useEffect(() => {
     if (!user || !username) return; 
     
-    // Pengaman Race-Condition
     let isSubscribed = true;
     let snapshotCounter = 0;
 
@@ -561,7 +583,6 @@ const App = () => {
         
         const data = await Promise.all(dataPromises);
         
-        // Hanya update state jika ini adalah data snapshot paling mutakhir
         if (isSubscribed && currentCounter === snapshotCounter) {
             setActiveTrips(data);
         }
@@ -683,7 +704,7 @@ const App = () => {
         watchId = navigator.geolocation.watchPosition(
           async (pos) => {
             const now = Date.now();
-            if (now - lastGpsUpdate.current < 15000) return;
+            if (now - lastGpsUpdate.current < 5000) return;
 
             try { 
               lastGpsUpdate.current = now;
@@ -742,24 +763,6 @@ const App = () => {
     showToast('error', 'Akses Ditolak! Username atau Password salah.');
   };
 
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    if (!user) { showToast('error', 'Sistem sedang memuat, silakan tunggu.'); return; }
-    setLoading(true);
-    
-    const u = e.target.username.value.toLowerCase().replace(/\s/g, '');
-    const p = e.target.password.value; const n = e.target.fullName.value; const r = e.target.role.value;
-
-    if (appUsers[u] || DEFAULT_USERS[u]) { setLoading(false); showToast('error', 'Username sudah digunakan!'); return; }
-
-    try {
-      const hashedPassword = await hashPassword(p);
-      // PENGAMAN ABSOLUT: Memakai flag { merge: true } agar data yang sudah ada TIDAK MUNGKIN TERHAPUS/TERTIMPA.
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), { [u]: { pass: hashedPassword, role: r, name: n } }, { merge: true });
-      setIsRegistering(false); showToast('success', 'Pendaftaran Berhasil! Silakan Login.');
-    } catch (err) { showToast('error', 'Terjadi kesalahan saat mendaftar.'); } finally { setLoading(false); }
-  };
-
   const saveUserAccount = async (e) => {
     e.preventDefault(); if (!user) return;
     const targetUsername = userForm.username.toLowerCase().replace(/\s/g, '');
@@ -769,33 +772,49 @@ const App = () => {
     if (!finalPassword && editUserMode) finalPassword = appUsers[editingUsername]?.pass || '';
     else if (finalPassword && finalPassword.length !== 64) finalPassword = await hashPassword(finalPassword);
 
-    const newUsers = { ...appUsers };
-    if (editUserMode && targetUsername !== editingUsername) delete newUsers[editingUsername];
-    newUsers[targetUsername] = { name: userForm.name, role: userForm.role, pass: finalPassword };
+    try {
+        const credentialsRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
+        
+        if (editUserMode && targetUsername !== editingUsername) {
+            await updateDoc(credentialsRef, {
+                [editingUsername]: deleteField()
+            });
+        }
+        
+        await setDoc(credentialsRef, { 
+            [targetUsername]: { name: userForm.name, role: userForm.role, pass: finalPassword } 
+        }, { merge: true });
 
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
-    showToast('success', 'Data Pengguna Berhasil Diperbarui!');
-    setEditUserMode(false); setEditingUsername(''); setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
-    setIsMobileFormOpen(false); 
+        showToast('success', 'Data Pengguna Berhasil Diperbarui!');
+        setEditUserMode(false); setEditingUsername(''); setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
+        setIsMobileFormOpen(false); 
+    } catch(err) {
+        showToast('error', 'Terjadi kesalahan saat menyimpan data.');
+    }
   };
 
   const confirmDeleteUser = async () => {
     if (!user || !userToDelete) return;
     if (userToDelete === 'superadmin') { showToast('error', 'Akun Super Admin Utama tidak bisa dihapus!'); setUserToDelete(null); return; }
     
-    const newUsers = { ...appUsers }; 
-    delete newUsers[userToDelete];
-    
-    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials'), newUsers);
-    showToast('success', `Akun ${userToDelete} berhasil dihapus!`);
-    
-    if(editUserMode && editingUsername === userToDelete) {
-        setEditUserMode(false);
-        setEditingUsername('');
-        setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
-        setIsMobileFormOpen(false);
+    try {
+        const credentialsRef = doc(db, 'artifacts', appId, 'public', 'data', 'system_users', 'credentials');
+        await updateDoc(credentialsRef, {
+            [userToDelete]: deleteField()
+        });
+
+        showToast('success', `Akun ${userToDelete} berhasil dihapus!`);
+        
+        if(editUserMode && editingUsername === userToDelete) {
+            setEditUserMode(false);
+            setEditingUsername('');
+            setUserForm({ username: '', name: '', pass: '', role: 'nurse' });
+            setIsMobileFormOpen(false);
+        }
+        setUserToDelete(null);
+    } catch (err) {
+        showToast('error', 'Terjadi kesalahan saat menghapus data.');
     }
-    setUserToDelete(null);
   };
 
   const deleteUserAccount = (uname) => {
@@ -1048,26 +1067,18 @@ const App = () => {
   const filteredHistory = useMemo(() => {
     const filtered = activeTrips.filter(t => {
       const matchStatus = t.status === 'COMPLETED';
-      
-      // Perbaiki logika pencocokan agar saat mode bulan, sistem hanya mencocokkan YYYY-MM
       const datePrefix = filterMode === 'month' ? historyFilter.substring(0, 7) : historyFilter;
       const matchDate = (!t.startTime || t.startTime.startsWith(datePrefix));
-      
       const matchService = (historyServiceFilter === 'all' || (t.serviceType || 'rujukan') === historyServiceFilter);
-      
       let matchRole = true;
       if (role === 'driver') matchRole = t.driverId === username;
-      // Perbaikan: Dokter dibebaskan agar bisa memantau semua riwayat, batasan HANYA untuk Perawat
       if (role === 'nurse') matchRole = !t.creatorId || t.creatorId === username;
-
       return matchStatus && matchDate && matchService && matchRole;
     });
-
-    // Mengurutkan data berdasarkan tanggal terkecil (terlama) ke terbesar (terbaru)
     return filtered.sort((a, b) => {
       const timeA = a.startTime ? new Date(a.startTime).getTime() : 0;
       const timeB = b.startTime ? new Date(b.startTime).getTime() : 0;
-      return timeA - timeB; // Ascending (Kecil ke Besar)
+      return timeA - timeB;
     });
   }, [activeTrips, historyFilter, filterMode, historyServiceFilter, role, username]);
 
@@ -1075,7 +1086,6 @@ const App = () => {
     if (t.status === 'PENDING') return true; 
     if (t.status === 'OTW') {
        if (role === 'driver') return t.driverId === username;
-       // Perbaikan: Dokter (serta manajemen/superadmin) bebas melihat semua rujukan OTW untuk pantau TTV
        if (role === 'nurse') return !t.creatorId || t.creatorId === username;
        return true; 
     }
@@ -1212,7 +1222,7 @@ const App = () => {
 
       doc.autoTable({
         startY: 40, head: head, body: body, theme: 'grid',
-        rowPageBreak: 'avoid', // PENGAMAN: Mencegah baris (yang memuat foto) terbelah jadi 2 halaman
+        rowPageBreak: 'avoid',
         styles: { fontSize: 8, cellPadding: 3, valign: 'middle', font: 'helvetica', lineWidth: 0.2, lineColor: [150, 150, 150] },
         headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold', halign: 'center' },
         columnStyles: { 0: { halign: 'center', cellWidth: 10 }, 7: { halign: 'center' }, 8: { halign: 'center' }, 9: { cellWidth: 32, minCellHeight: 18 }, 10: { cellWidth: 32, minCellHeight: 18 }, 11: { halign: 'center' } },
@@ -1232,7 +1242,7 @@ const App = () => {
         didDrawCell: function(data) {
           if (data.section === 'body') { 
             const trip = filteredHistory[data.row.index]; 
-            if (!trip) return; // PENGAMAN
+            if (!trip) return;
             let xPos = data.cell.x + 2; let yPos = data.cell.y + 2; let imgSize = 14;
             
             if (data.column.index === 9) {
@@ -1252,7 +1262,6 @@ const App = () => {
                     currentX = startX;
                     currentY += imgSize + 2;
                   }
-                  // PENGAMAN: Cek aman jika docItem.type / url di data lama ada yang kosong
                   const isImage = (docItem.type && docItem.type.startsWith('image/')) || (docItem.url && docItem.url.startsWith('data:image'));
                   if (isImage) {
                     try { doc.addImage(docItem.url, 'JPEG', currentX, currentY, imgSize, imgSize); } catch(e) {}
@@ -2572,7 +2581,7 @@ const App = () => {
                                 ) : (
                                   <span className={`text-[10px] px-2 py-1 rounded-md font-black uppercase ${tColor.bg} ${tColor.text}`}>{trip.triage}</span>
                                 )}
-                                <span className={`text-[10px] px-2 py-1 rounded-md font-black uppercase border ${trip.paymentStatus === 'BPJS' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>{trip.paymentStatus || 'UMUM'}</span>
+                                <span className={`text-[9px] px-2 py-1 rounded-md font-black uppercase border ${trip.paymentStatus === 'BPJS' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>{trip.paymentStatus || 'UMUM'}</span>
                               </div>
                               <p className="text-sm text-slate-500 font-bold bg-slate-50 inline-block px-3 py-1.5 rounded-lg mb-1 border border-slate-100">{trip.serviceType === 'jenazah' ? 'Ket: ' : 'Dx: '} {trip.diagnosis}</p><br />
                               {trip.dpjp !== '-' && <p className="text-xs text-indigo-700 font-bold bg-indigo-50 inline-block px-3 py-1.5 mt-2 rounded border border-indigo-100">DPJP: {trip.dpjp}</p>}
